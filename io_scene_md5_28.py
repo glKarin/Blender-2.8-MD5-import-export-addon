@@ -1,7 +1,7 @@
 bl_info = {
     "name": "id tech 4 MD5 format",
     "author": "nemyax, 2.8 Update: Samson",
-    "version": (1, 11, 20230227),
+    "version": (1, 10, 20240223),
     "blender": (2, 80, 0),
     "location": "File > Import-Export",
     "description": "Import and export md5mesh and md5anim",
@@ -18,19 +18,20 @@ import mathutils as mu
 import math
 import re
 
+
 from bpy.props import (
-        BoolProperty,
-        FloatProperty,
-        StringProperty,
-        IntProperty,
-        CollectionProperty)
+    BoolProperty,
+    FloatProperty,
+    StringProperty,
+    IntProperty,
+    CollectionProperty)
 from bpy_extras.io_utils import (
-        ExportHelper,
-        ImportHelper,
-        path_reference_mode)
+    ExportHelper,
+    ImportHelper,
+    path_reference_mode)
 from bpy.types import (
-        Operator,
-        OperatorFileListElement)
+    Operator,
+    OperatorFileListElement)
 
 
 msgLines = [] # global for error messages
@@ -231,16 +232,6 @@ def read_md5anim(fullPath,animName,prepend,correctionMatrix):
     bf0_re = re.compile("\s*(baseframe)\s+{.*")
     bf1_re = re.compile("\s*\("+w*3+"\s+\)\s+\("+w*3+"\s+\).*")
     f_re   = re.compile("\s*(frame).*")
-    
-    ## uncomment code below to set the render frame rate to match the animation frame rate
-    #md5frate_re = re.compile("(frameRate)\s\d+")
-    #frlist = list(filter(md5frate_re.match,md5anim))
-    #if frlist:
-    #    m = re.search('\d+', frlist.pop(0))
-    #    if m:
-    #        md5frate = int(format(m.group()))
-    #        bpy.context.scene.render.fps = md5frate
-            
     hier = gather(j_re, e_re, md5anim)
     for i in range(len(hier)):
         jname, par, flags = hier[i][:-1]
@@ -258,8 +249,6 @@ def read_md5anim(fullPath,animName,prepend,correctionMatrix):
     xf_keys = convert_xforms(pbs, transpose(frames),correctionMatrix)
    
     end_frame = len(frames) - 1
-    bpy.context.scene.frame_set(0)
-    bpy.data.scenes[0].frame_end = end_frame
     set_keys(
         flatten_channels(fcurves),
         flatten_frames(xf_keys),
@@ -525,13 +514,20 @@ def define_components(obj, bm, bones, correctionMatrix):
 def make_hierarchy_block(bones, boneIndexLookup):
     block = ["hierarchy {\n"]
     xformIndex = 0
+    hasRootBond = False
     for b in bones:
         if b.parent:
             parentIndex = boneIndexLookup[b.parent.name]
         else:
             parentIndex = -1
-        block.append("  \"{}\" {} 63 {} //\n".format(
-            b.name, parentIndex, xformIndex))
+        rawParentIndex = parentIndex
+        if parentIndex == -1:
+            if hasRootBond:
+                parentIndex = 0
+            else:
+                hasRootBond = True
+        block.append("  \"{}\" {} 63 {} // {}\n".format(
+            b.name, parentIndex, xformIndex, rawParentIndex))
         xformIndex += 6
     block.append("}\n")
     block.append("\n")
@@ -563,20 +559,31 @@ def make_baseframe_block(bones, correctionMatrix):
 def make_joints_block(bones, boneIndexLookup, correctionMatrix):
     block = []
     block.append("joints {\n")
+    index = 0
+    hasRootBond = False
     for b in bones:
         if b.parent:
             parentIndex = boneIndexLookup[b.parent.name]
         else:
             parentIndex = -1
+        rawParentIndex = parentIndex
+        if parentIndex == -1:
+            if hasRootBond:
+                parentIndex = 0
+            else:
+                hasRootBond = True
         boneMatrix = correctionMatrix @ b.matrix_local
         xPos, yPos, zPos = boneMatrix.translation
         xOrient, yOrient, zOrient =\
         (-boneMatrix.to_quaternion()).normalized()[1:] # MD5 wants it negated
         block.append(\
-        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".\
+        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* {}: {} */\n".\
         format(b.name, parentIndex,\
         xPos, yPos, zPos,\
-        xOrient, yOrient, zOrient))
+        xOrient, yOrient, zOrient
+		, index, rawParentIndex
+        ))
+        index += 1
     block.append("}\n")
     block.append("\n")
     return block
@@ -676,7 +683,7 @@ def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings):
     f.close()
     return
 
-def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_range, baseframeAnim ):
+def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_range ):
     
     #export the .md5anim for the action currently associated with the armature animation
       
@@ -701,15 +708,7 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
     for b in bones:
         boneIndexLookup[b.name] = bones.index(b)
     hierarchy = make_hierarchy_block(bones, boneIndexLookup)
-     
     baseframe = make_baseframe_block(bones, correctionMatrix)
-    genBaseFrame = False
-    
-    if ( baseframeAnim == True ) :
-        baseframe = ["baseframe {\n"]
-        genBaseFrame = True
-
-
     bounds = []
     frames = []
     for frame in range(startFrame, endFrame + 1):
@@ -718,7 +717,6 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
         for mo in meshObjects:
             bm = bmesh.new()
             depsgraph = bpy.context.evaluated_depsgraph_get()
-            depsgraph.update()
             bm.from_object(mo, depsgraph)
             verts.extend([correctionMatrix @ mo.matrix_world @ v.co.to_4d()
                 for v in bm.verts])
@@ -747,16 +745,6 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
             frameBlock.append(\
             "  {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} {:.10f}\n".\
             format(xPos, yPos, zPos, xOrient, yOrient, zOrient))
-            if ( genBaseFrame == True) :
-                baseframe.append(\
-                "    ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".\
-                format(xPos, yPos, zPos, xOrient, yOrient, zOrient))
-        
-        if (genBaseFrame ) :
-            baseframe.append("}\n")
-            baseframe.append("\n")
-            genBaseFrame = False
-        
         frameBlock.append("}\n")
         frameBlock.append("\n")
         frames.extend(frameBlock)
@@ -779,6 +767,24 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
     for line in lines:
         f.write(line)
     bpy.context.scene.frame_set(goBack)
+    return
+
+
+def write_def(filePath, name, mesh, anims):
+    f = open(filePath, 'w')
+    lines = []
+    lines.append("model " + name + " {\n")
+    lines.append("\tmesh {}\n".format(mesh))
+    lines.append("\n")
+    for anim in anims:
+        lines.append("\tanim {} {}\n".format(anim, anim))
+    lines.append("}\n")
+    lines.append("entityDef " + name + " {\n")
+    lines.append("\t\"spawnclass\" \"idAnimatedEntity\"\n")
+    lines.append("\t\"model\" \"{}\"\n".format(name))
+    lines.append("}\n")
+    for line in lines: f.write(line)
+    f.close()
     return
 
 
@@ -910,11 +916,11 @@ def is_export_go(what, collection):
     if not bones:
         return ['layer_empty', None]
     rootBones = [i for i in bones if not i.parent]
-    if len(rootBones) > 1:
-        boneList = []
-        for rb in rootBones:
-            boneList.append("- " + str(rb.name))
-        return ['orphans', boneList]
+#    if len(rootBones) > 1:
+#        boneList = []
+#        for rb in rootBones:
+#            boneList.append("- " + str(rb.name))
+#        return ['orphans', boneList]
     abandonedBones = [i for i in bones
         if i.parent and i.parent not in bones[:]]
     if abandonedBones:
@@ -1625,12 +1631,6 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
             description="Only export frames indicated by timeline preview 'Start' and 'End' frames values - otherwise all action frames will be exported.",
             default=False,
             )
-            
-        baseframeAnim = BoolProperty(
-            name="Baseframe = 1st anim frame.",
-            description="Use the values from the first frame of animation to generate the baseframe.",
-            default=True,
-            )
                  
     else:
     
@@ -1661,13 +1661,6 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
                 description="Only export frames indicated by timeline preview 'Start' and 'End' frames values - otherwise all action frames will be exported.",
                 default=False,
                 )
-        
-        baseframeAnim : BoolProperty(
-            name="Baseframe = 1st anim frame.",
-            description="Use the values from the first frame of animation to generate the baseframe.",
-            default=True,
-            )
-
     
     
     path_mode = path_reference_mode
@@ -1715,7 +1708,7 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
         
-        write_md5anim(self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly,frame_range, self.baseframeAnim)
+        write_md5anim(self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly,frame_range)
         return {'FINISHED'}
 
 class ExportMD5Batch(bpy.types.Operator, ExportHelper):
@@ -1755,7 +1748,50 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             description="""Only export frames indicated by timeline preview 'Start' and 'End' frames values \n - otherwise all action frames will be exported.  Has no effect if 'Export All Anims' is selected.""",
             default=False,
             )
+        exportDef = BoolProperty(
+            name="Export model and def file",
+            description="""Export model and def file""",
+            default=False,
+            )
     
+        reorientDegrees = bpy.props.EnumProperty(
+        items= (('0', '0 Degrees', 'Do not reorient'),    
+                ('90', '90 Degrees ( X to Y )', 'Rotate 90 degrees (e.g. reorient facing +X to facing +Y)'),    
+                ('-90', '-90 Degrees ( Y to X )', 'Rotate -90 degrees (e.g. reorient facing +Y to facing +X' ),    
+                ('180', '180 Degrees', 'Rotate 180 degrees')),
+        name = "Reorient Model/Anims",
+        description = "Degrees to rotate model/anims during export.  Useful to reorient to face Y axis if desired. 90 Degrees rotates clockwise from above. -90 Rotates counter-clockwise from above.",
+        default = '0')
+    
+        exportAllAnims = BoolProperty(
+                name="Export All Anims",
+                description="""Export all actions associated with the object/collection as MD5 anims.
+    All keyframes for each action will be exported.
+    ( This exports all actions in the action editor that are prepended with the object/collection name. )""",
+                default=False,
+                )
+        onlyPrepend = BoolProperty(
+                name="Prepended action names only",
+                description="Only export actions prepended with the collection name.",
+                default=False,
+                )
+        stripPrepend = BoolProperty(
+                name="Strip action name prepend",
+                description="Strip the prepended collection name from exported action names.",
+                default=True,
+                )
+        previewKeysOnly = BoolProperty(
+                name="Use timeline Start/End frames",
+                description="""Only export frames indicated by timeline preview 'Start' and 'End' frames values 
+    - otherwise all action frames will be exported.  Has no effect if 'Export All Anims' is selected.""",
+                default=False,
+                )
+        exportDef = BoolProperty(
+            name="Export model and def file",
+            description="""Export model and def file""",
+            default=False,
+            )
+        
         reorientDegrees = bpy.props.EnumProperty(
             items= (('0', '0 Degrees', 'Do not reorient'),    
                     ('90', '90 Degrees ( X to Y )', 'Rotate 90 degrees (e.g. reorient facing +X to facing +Y)'),    
@@ -1764,36 +1800,28 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             name = "Reorient Model/Anims",
             description = "Degrees to rotate model/anims during export.  Useful to reorient to face Y axis if desired. 90 Degrees rotates clockwise from above. -90 Rotates counter-clockwise from above.",
             default = '0')
-  
-        scaleFactor = FloatProperty(
-            name="Scale",
-            description="Scale all data",
-            min=0.01, max=1000.0,
-            soft_min=0.01,
-            soft_max=1000.0,
-            default=1.0,
-            )
-            
-        fixWindings = BoolProperty(
-            name="Fix tri indices for eye deform",
-            description="Only select if having issues with materials flagged with eyeDeform",
-            default=False
-            )
-                
-        baseframeAnim = BoolProperty(
-            name="Baseframe = 1st anim frame.",
-            description="Use the values from the first frame of animation to generate the baseframe.",
-            default=True,
-            )
 
-            
+        scaleFactor = FloatProperty(
+                name="Scale",
+                description="Scale all data",
+                min=0.01, max=1000.0,
+                soft_min=0.01,
+                soft_max=1000.0,
+                default=1.0,
+                )
+                
+        fixWindings = BoolProperty(
+        name="Fix tri indices for eye deform",
+        description="Only select if having issues with materials flagged with eyeDeform",
+        default=False
+        )
+        
     else:
         
         filter_glob : StringProperty(
-                default="*.md5mesh",
-                options={'HIDDEN'},
-                )
-                
+            default="*.md5mesh",
+            options={'HIDDEN'},
+            )
         exportAllAnims : BoolProperty(
                 name="Export All Anims",
                 description="""Export all actions associated with the object/collection as MD5 anims.
@@ -1821,13 +1849,13 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 )
         
         reorientDegrees : bpy.props.EnumProperty(
-                items= (('0', '0 Degrees', 'Do not reorient'),    
-                        ('90', '90 Degrees ( X to Y )', 'Rotate 90 degrees (e.g. reorient facing +X to facing +Y)'),    
-                        ('-90', '-90 Degrees ( Y to X )', 'Rotate -90 degrees (e.g. reorient facing +Y to facing +X' ),    
-                        ('180', '180 Degrees', 'Rotate 180 degrees')),
-                name = "Reorient Model/Anims",
-                description = "Degrees to rotate model/anims during export.  Useful to reorient to face Y axis if desired. 90 Degrees rotates clockwise from above. -90 Rotates counter-clockwise from above.",
-                default = '0')
+            items= (('0', '0 Degrees', 'Do not reorient'),    
+                    ('90', '90 Degrees ( X to Y )', 'Rotate 90 degrees (e.g. reorient facing +X to facing +Y)'),    
+                    ('-90', '-90 Degrees ( Y to X )', 'Rotate -90 degrees (e.g. reorient facing +Y to facing +X' ),    
+                    ('180', '180 Degrees', 'Rotate 180 degrees')),
+            name = "Reorient Model/Anims",
+            description = "Degrees to rotate model/anims during export.  Useful to reorient to face Y axis if desired. 90 Degrees rotates clockwise from above. -90 Rotates counter-clockwise from above.",
+            default = '0')
 
         scaleFactor : FloatProperty(
                 name="Scale",
@@ -1839,17 +1867,15 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 )
                 
         fixWindings : BoolProperty(
-                name="Fix tri indices for eye deform",
-                description="Only select if having issues with materials flagged with eyeDeform",
-                default=False
-                )
-                
-        baseframeAnim : BoolProperty(
-                name="Baseframe = 1st anim frame.",
-                description="Use the values from the first frame of animation to generate the baseframe.",
-                default=True,
-                )
-
+        name="Fix tri indices for eye deform",
+        description="Only select if having issues with materials flagged with eyeDeform",
+        default=False
+        )
+        exportDef : BoolProperty(
+            name="Export model and def file",
+            description="""Export model and def file""",
+            default=False,
+            )
        
     path_mode = path_reference_mode
     check_extension = True
@@ -1884,6 +1910,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         #write the mesh
         write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings )
                 
+        anims = []
         if not self.exportAllAnims:
             #write the active action
                         
@@ -1895,7 +1922,8 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 name = remove_prefix(name,collection_Prefix)
                                      
             self.filepath = os.path.join( batch_directory, name )
-            write_md5anim( self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly, frame_range, self.baseframeAnim)
+            write_md5anim( self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly, frame_range)
+            anims.append(name)
         else:
             
             #write all frames for all actions
@@ -1903,7 +1931,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             for exportAction in bpy.data.actions:
                 name = exportAction.name
                 frame_range = exportAction.frame_range
-                print("Checking action name " + name + " to see if in collection " + collection_Prefix)
+                print("Checking actino name " + name + " to see if in collection " + collection_Prefix)
                 if name.startswith(collection_Prefix) or not self.onlyPrepend :
                     #export this action
                     armature.animation_data.action = exportAction                   
@@ -1914,10 +1942,15 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                         name = name + ".md5anim"
                     self.filepath = os.path.join( batch_directory, name )
                     print("Exporting animation "+self.filepath)
-                    write_md5anim( self.filepath, prerequisites, correctionMatrix, False, frame_range, self.baseframeAnim)
+                    write_md5anim( self.filepath, prerequisites, correctionMatrix, False, frame_range)
+                    anims.append(name)
             
             armature.animation_data.action = oldAction
             
+        if self.exportDef:
+            self.filepath = os.path.join( batch_directory, collection.name + ".def" )
+            write_def( self.filepath, collection.name, collection.name, anims)
+            print("Exporting model and def "+self.filepath)
 
         return {'FINISHED'}
 
