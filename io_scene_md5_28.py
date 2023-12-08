@@ -511,6 +511,47 @@ def define_components(obj, bm, bones, correctionMatrix):
             wtIndex += 1
     return (verts, tris, weights)
 
+def define_components_2(obj, bm, bones, correctionMatrix, faces):
+    scaleFactor = correctionMatrix.to_scale()[0]
+    armature = [a for a in bpy.data.armatures if bones[0] in a.bones[:]][0]
+    armatureObj = [o for o in bpy.data.objects if o.data == armature][0]
+    boneNames = [b.name for b in bones]
+    allVertGroups = obj.vertex_groups[:]
+    weightGroupIndexes = [vg.index for vg in allVertGroups if vg.name in boneNames]
+    uvData = bm.loops.layers.uv.active
+    weightData = bm.verts.layers.deform.active
+    tris = [[f.index, f.verts[2].index, f.verts[1].index, f.verts[0].index]
+        for f in faces] # reverse vert order to flip normal
+    verts = []
+    weights = []
+    wtIndex = 0
+    firstWt = 0
+    for vert in bm.verts:
+        vGroupDict = vert[weightData]
+        wtDict = dict([(k, vGroupDict[k]) for k in vGroupDict.keys()
+            if k in weightGroupIndexes])
+        u = vert.link_loops[0][uvData].uv.x
+        v = 1 - vert.link_loops[0][uvData].uv.y # MD5 wants it flipped
+        numWts = len(wtDict.keys())
+        verts.append([vert.index, u, v, firstWt, numWts])
+        wtScaleFactor = 1.0 / sum(wtDict.values())
+        firstWt += numWts
+        for vGroup in wtDict:
+            bone = [b for b in bones
+                if b.name == allVertGroups[vGroup].name][0]
+            boneIndex = bones.index(bone)
+            coords4d =\
+                bone.matrix_local.inverted() @\
+                armatureObj.matrix_world.inverted() @\
+                obj.matrix_world @\
+                (vert.co.to_4d() * scaleFactor)
+            x, y, z = coords4d[:3]
+            weight = wtDict[vGroup] * wtScaleFactor
+            wtEntry = [wtIndex, boneIndex, weight, x, y, z]
+            weights.append(wtEntry)
+            wtIndex += 1
+    return (verts, tris, weights)
+
 def make_hierarchy_block(bones, boneIndexLookup):
     block = ["hierarchy {\n"]
     xformIndex = 0
@@ -624,6 +665,55 @@ def make_mesh_block(obj, bones, correctionMatrix, fixWindings):
     block.append("\n")
     return block
 
+def make_mesh_block_2(obj, bones, correctionMatrix, fixWindings):
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    triangulate(cut_up(strip_wires(bm)))
+    triMap = {}
+    for f in bm.faces:
+        if not f.material_index in triMap:
+            triMap[f.material_index] = []
+        group = triMap[f.material_index]
+        group.append(f);
+	
+    block = []
+    for material_index, faces in triMap.items():
+        verts, tris, weights = define_components_2(obj, bm, bones, correctionMatrix, faces)	
+        shaderName = "default"
+        ms = obj.material_slots
+        if True:
+            shaderName = obj.material_slots[material_index].material.name
+        else:
+            if ms:
+                taken = [s for s in ms if s.material ]
+                if taken:
+                    shaderName = taken[0].material.name
+        print(shaderName)
+        block.append("mesh {\n")
+        block.append("  shader \"{}\"\n".format(shaderName))
+        block.append("\n  numverts {}\n".format(len(verts)))
+        for v in verts:
+            block.append(\
+            "  vert {} ( {:.10f} {:.10f} ) {} {}\n".\
+            format(v[0], v[1], v[2], v[3], v[4]))
+        block.append("\n  numtris {}\n".format(len(tris)))
+        for t in tris:
+            if fixWindings:
+                block.append("  tri {} {} {} {}\n".format(t[0], t[3], t[1], t[2])) # fix windings - current blender windings break eyeDeform in D3 materials
+            else:
+                block.append("  tri {} {} {} {}\n".format(t[0], t[1], t[2], t[3]))
+            
+        block.append("\n  numweights {}\n".format(len(weights)))
+        for w in weights:
+            block.append(\
+            "  weight {} {} {:.10f} ( {:.10f} {:.10f} {:.10f} )\n".\
+            format(w[0], w[1], w[2], w[3], w[4], w[5]))
+        block.append("}\n")
+        block.append("\n")
+    bm.free()
+		
+    return (len(triMap), block)
+
 def strip_wires(bm):
     [bm.faces.remove(f) for f in bm.faces if len(f.verts) < 3]
     [bm.edges.remove(e) for e in bm.edges if not e.link_faces[:]]
@@ -660,22 +750,29 @@ def triangulate(bm):
     bmesh.ops.triangulate(bm, faces=nonTris)
     return bm
 
-def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings):
+def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, byMaterial):
     bones, meshObjects = prerequisites
     boneIndexLookup = {}
     for b in bones:
         boneIndexLookup[b.name] = bones.index(b)
     md5joints = make_joints_block(bones, boneIndexLookup, correctionMatrix)
     md5meshes = []
+    nummeshes = 0
     for mo in meshObjects:
-        md5meshes.append(make_mesh_block(mo, bones, correctionMatrix, fixWindings))
+        if byMaterial:
+            num, meshes = make_mesh_block_2(mo, bones, correctionMatrix, fixWindings)
+            nummeshes += num
+            md5meshes.append(meshes)
+        else:
+            md5meshes.append(make_mesh_block(mo, bones, correctionMatrix, fixWindings))
+            nummeshes += 1
     f = open(filePath, 'w')
     lines = []
     lines.append("MD5Version 10" + record_parameters(correctionMatrix) + "\n")
     lines.append("commandline \"\"\n")
     lines.append("\n")
     lines.append("numJoints " + str(len(bones)) + "\n")
-    lines.append("numMeshes " + str(len(meshObjects)) + "\n")
+    lines.append("numMeshes " + str(nummeshes) + "\n")
     lines.append("\n")
     lines.extend(md5joints)
     for m in md5meshes: lines.extend(m)
@@ -1531,6 +1628,11 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 description="Only select if having issues with materials flagged with eyeDeform",
                 default=False
                 )
+        byMaterial = BoolProperty(
+                name="Mesh group by material",
+                description="Mesh group by material",
+                default=False
+                )
  
                 
     else:
@@ -1562,6 +1664,11 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 description="Only select if having issues with materials flagged with eyeDeform",
                 default=False
                 )
+        byMaterial : BoolProperty(
+                name="Mesh group by material",
+                description="Mesh group by material",
+                default=False
+                )
                 
     path_mode = path_reference_mode
     check_extension = True
@@ -1589,7 +1696,7 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
         orientationTweak = mu.Matrix.Rotation(math.radians( rotdeg ),4,'Z')
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings)
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial)
         return {'FINISHED'}
 
 class ExportMD5Anim(bpy.types.Operator, ExportHelper):
@@ -1786,11 +1893,6 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
     - otherwise all action frames will be exported.  Has no effect if 'Export All Anims' is selected.""",
                 default=False,
                 )
-        exportDef = BoolProperty(
-            name="Export model and def file",
-            description="""Export model and def file""",
-            default=False,
-            )
         
         reorientDegrees = bpy.props.EnumProperty(
             items= (('0', '0 Degrees', 'Do not reorient'),    
@@ -1815,6 +1917,16 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         description="Only select if having issues with materials flagged with eyeDeform",
         default=False
         )
+        exportDef = BoolProperty(
+            name="Export model and def file",
+            description="""Export model and def file""",
+            default=False,
+            )
+        byMaterial = BoolProperty(
+                name="Mesh group by material",
+                description="Mesh group by material",
+                default=False
+                )
         
     else:
         
@@ -1876,6 +1988,11 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             description="""Export model and def file""",
             default=False,
             )
+        byMaterial : BoolProperty(
+                name="Mesh group by material",
+                description="Mesh group by material",
+                default=False
+                )
        
     path_mode = path_reference_mode
     check_extension = True
@@ -1908,7 +2025,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         collection_Prefix = "("+collection.name+")_"
                
         #write the mesh
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings )
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial )
                 
         anims = []
         if not self.exportAllAnims:
