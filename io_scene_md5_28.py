@@ -602,6 +602,7 @@ def make_joints_block(bones, boneIndexLookup, correctionMatrix):
     block.append("joints {\n")
     index = 0
     hasRootBond = False
+    boneDict = {}
     for b in bones:
         if b.parent:
             parentIndex = boneIndexLookup[b.parent.name]
@@ -613,16 +614,17 @@ def make_joints_block(bones, boneIndexLookup, correctionMatrix):
                 parentIndex = 0
             else:
                 hasRootBond = True
+        boneDict[index] = b.name
         boneMatrix = correctionMatrix @ b.matrix_local
         xPos, yPos, zPos = boneMatrix.translation
         xOrient, yOrient, zOrient =\
         (-boneMatrix.to_quaternion()).normalized()[1:] # MD5 wants it negated
         block.append(\
-        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* {}: {} */\n".\
+        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* index: {}; parent: {} {}({}) */\n".\
         format(b.name, parentIndex,\
         xPos, yPos, zPos,\
         xOrient, yOrient, zOrient
-		, index, rawParentIndex
+		, index, parentIndex, boneDict.get(parentIndex, ''), rawParentIndex
         ))
         index += 1
     block.append("}\n")
