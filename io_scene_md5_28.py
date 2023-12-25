@@ -470,7 +470,7 @@ def record_parameters(correctionMatrix):
         " Reorient: {};".format(bool(correctionMatrix.to_euler()[2])),
         " Scale: {}".format(correctionMatrix.decompose()[2][0])])
 
-def define_components(obj, bm, bones, correctionMatrix):
+def define_components(obj, bm, bones, correctionMatrix, addOriginAsRootBone):
     scaleFactor = correctionMatrix.to_scale()[0]
     armature = [a for a in bpy.data.armatures if bones[0] in a.bones[:]][0]
     armatureObj = [o for o in bpy.data.objects if o.data == armature][0]
@@ -499,6 +499,9 @@ def define_components(obj, bm, bones, correctionMatrix):
             bone = [b for b in bones
                 if b.name == allVertGroups[vGroup].name][0]
             boneIndex = bones.index(bone)
+
+            if addOriginAsRootBone: boneIndex += 1
+
             coords4d =\
                 bone.matrix_local.inverted() @\
                 armatureObj.matrix_world.inverted() @\
@@ -511,7 +514,7 @@ def define_components(obj, bm, bones, correctionMatrix):
             wtIndex += 1
     return (verts, tris, weights)
 
-def define_components_2(obj, bm, bones, correctionMatrix, faces):
+def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone):
     scaleFactor = correctionMatrix.to_scale()[0]
     armature = [a for a in bpy.data.armatures if bones[0] in a.bones[:]][0]
     armatureObj = [o for o in bpy.data.objects if o.data == armature][0]
@@ -540,6 +543,9 @@ def define_components_2(obj, bm, bones, correctionMatrix, faces):
             bone = [b for b in bones
                 if b.name == allVertGroups[vGroup].name][0]
             boneIndex = bones.index(bone)
+
+            if addOriginAsRootBone: boneIndex += 1
+
             coords4d =\
                 bone.matrix_local.inverted() @\
                 armatureObj.matrix_world.inverted() @\
@@ -574,8 +580,51 @@ def make_hierarchy_block(bones, boneIndexLookup):
     block.append("\n")
     return block
 
+def make_hierarchy_block_AddOriginAsRoot(bones, boneIndexLookup):
+    block = ["hierarchy {\n"]
+    xformIndex = 0
+    block.append("  \"{}\" {} 63 {} // {}\n".format("origin", -1, xformIndex, -2))
+    xformIndex += 6
+    for b in bones:
+        if b.parent:
+            parentIndex = boneIndexLookup[b.parent.name]
+        else:
+            parentIndex = -1
+        rawParentIndex = parentIndex
+        parentIndex += 1
+        block.append("  \"{}\" {} 63 {} // {}\n".format(
+            b.name, parentIndex, xformIndex, rawParentIndex))
+        xformIndex += 6
+    block.append("}\n")
+    block.append("\n")
+    return block
+
 def make_baseframe_block(bones, correctionMatrix):
     block = ["baseframe {\n"]
+    armature = bones[0].id_data
+    armObject = [o for o in bpy.data.objects
+        if o.data == armature][0]
+    armMatrix = armObject.matrix_world
+    for b in bones:
+        objSpaceMatrix = b.matrix_local
+        if b.parent:
+            bMatrix =\
+            b.parent.matrix_local.inverted() @\
+            armMatrix @\
+            objSpaceMatrix
+        else:
+            bMatrix = correctionMatrix @ objSpaceMatrix
+        xPos, yPos, zPos = bMatrix.translation
+        xOrient, yOrient, zOrient = (-bMatrix.to_quaternion()).normalized()[1:]
+        block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".\
+        format(xPos, yPos, zPos, xOrient, yOrient, zOrient))
+    block.append("}\n")
+    block.append("\n")
+    return block
+
+def make_baseframe_block_AddOriginAsRoot(bones, correctionMatrix):
+    block = ["baseframe {\n"]
+    block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".format(0, 0, 0, 0, 0, 0))
     armature = bones[0].id_data
     armObject = [o for o in bpy.data.objects
         if o.data == armature][0]
@@ -631,7 +680,44 @@ def make_joints_block(bones, boneIndexLookup, correctionMatrix):
     block.append("\n")
     return block
 
-def make_mesh_block(obj, bones, correctionMatrix, fixWindings):
+def make_joints_block_AddOriginAsRoot(bones, boneIndexLookup, correctionMatrix):
+    block = []
+    block.append("joints {\n")
+    index = 0
+    boneDict = {}
+    block.append(\
+    "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* index: {}; parent: {} {}({}) */\n".format(
+        "origin", -1,
+    0, 0, 0,
+    0, 0, 0
+    , 0, "", "generate", -2
+    ))
+    index += 1
+    for b in bones:
+        if b.parent:
+            parentIndex = boneIndexLookup[b.parent.name]
+        else:
+            parentIndex = -1
+        rawParentIndex = parentIndex
+        parentIndex += 1
+        boneDict[index] = b.name
+        boneMatrix = correctionMatrix @ b.matrix_local
+        xPos, yPos, zPos = boneMatrix.translation
+        xOrient, yOrient, zOrient =\
+        (-boneMatrix.to_quaternion()).normalized()[1:] # MD5 wants it negated
+        block.append(\
+        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* index: {}; parent: {} {}({}) */\n".\
+        format(b.name, parentIndex,\
+        xPos, yPos, zPos,\
+        xOrient, yOrient, zOrient
+		, index, parentIndex, boneDict.get(parentIndex, ''), rawParentIndex
+        ))
+        index += 1
+    block.append("}\n")
+    block.append("\n")
+    return block
+
+def make_mesh_block(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone):
     shaderName = "default"
     ms = obj.material_slots
     if ms:
@@ -641,7 +727,7 @@ def make_mesh_block(obj, bones, correctionMatrix, fixWindings):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     triangulate(cut_up(strip_wires(bm)))
-    verts, tris, weights = define_components(obj, bm, bones, correctionMatrix)
+    verts, tris, weights = define_components(obj, bm, bones, correctionMatrix, addOriginAsRootBone)
     bm.free()
     block = []
     block.append("mesh {\n")
@@ -667,7 +753,7 @@ def make_mesh_block(obj, bones, correctionMatrix, fixWindings):
     block.append("\n")
     return block
 
-def make_mesh_block_2(obj, bones, correctionMatrix, fixWindings):
+def make_mesh_block_SplitByMaterial(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone):
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     triangulate(cut_up(strip_wires(bm)))
@@ -680,7 +766,7 @@ def make_mesh_block_2(obj, bones, correctionMatrix, fixWindings):
 	
     block = []
     for material_index, faces in triMap.items():
-        verts, tris, weights = define_components_2(obj, bm, bones, correctionMatrix, faces)	
+        verts, tris, weights = define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone)
         shaderName = "default"
         ms = obj.material_slots
         if True:
@@ -752,28 +838,37 @@ def triangulate(bm):
     bmesh.ops.triangulate(bm, faces=nonTris)
     return bm
 
-def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, byMaterial):
+def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, byMaterial, addOriginAsRootBone):
     bones, meshObjects = prerequisites
     boneIndexLookup = {}
     for b in bones:
         boneIndexLookup[b.name] = bones.index(b)
-    md5joints = make_joints_block(bones, boneIndexLookup, correctionMatrix)
+    
+    if addOriginAsRootBone:
+        md5joints = make_joints_block_AddOriginAsRoot(bones, boneIndexLookup, correctionMatrix)
+    else:
+        md5joints = make_joints_block(bones, boneIndexLookup, correctionMatrix)
+        
     md5meshes = []
     nummeshes = 0
     for mo in meshObjects:
         if byMaterial:
-            num, meshes = make_mesh_block_2(mo, bones, correctionMatrix, fixWindings)
+            num, meshes = make_mesh_block_SplitByMaterial(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone)
             nummeshes += num
             md5meshes.append(meshes)
         else:
-            md5meshes.append(make_mesh_block(mo, bones, correctionMatrix, fixWindings))
+            md5meshes.append(make_mesh_block(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone))
             nummeshes += 1
     f = open(filePath, 'w')
+
+    numBone = len(bones)
+    if addOriginAsRootBone: numBone += 1
+
     lines = []
     lines.append("MD5Version 10" + record_parameters(correctionMatrix) + "\n")
     lines.append("commandline \"\"\n")
     lines.append("\n")
-    lines.append("numJoints " + str(len(bones)) + "\n")
+    lines.append("numJoints " + str(numBone) + "\n")
     lines.append("numMeshes " + str(nummeshes) + "\n")
     lines.append("\n")
     lines.extend(md5joints)
@@ -782,7 +877,7 @@ def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, byMate
     f.close()
     return
 
-def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_range ):
+def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_range, addOriginAsRootBone ):
     
     #export the .md5anim for the action currently associated with the armature animation
       
@@ -806,8 +901,14 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
     boneIndexLookup = {}
     for b in bones:
         boneIndexLookup[b.name] = bones.index(b)
-    hierarchy = make_hierarchy_block(bones, boneIndexLookup)
-    baseframe = make_baseframe_block(bones, correctionMatrix)
+
+    if addOriginAsRootBone:
+        hierarchy = make_hierarchy_block_AddOriginAsRoot(bones, boneIndexLookup)
+        baseframe = make_baseframe_block_AddOriginAsRoot(bones, correctionMatrix)
+    else:
+        hierarchy = make_hierarchy_block(bones, boneIndexLookup)
+        baseframe = make_baseframe_block(bones, correctionMatrix)
+        
     bounds = []
     frames = []
     for frame in range(startFrame, endFrame + 1):
@@ -830,6 +931,8 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
         "  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".\
         format(minX, minY, minZ, maxX, maxY, maxZ))
         frameBlock = ["frame {} {{\n".format(frame - startFrame)]
+        if addOriginAsRootBone:
+            frameBlock.append("  {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} {:.10f}\n".format(0, 0, 0, 0, 0, 0))
         scaleFactor = correctionMatrix.to_scale()[0]
         for b in bones:
             pBone = pBones[b.name]
@@ -849,6 +952,9 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
         frames.extend(frameBlock)
     f = open(filePath, 'w')
     numJoints = len(bones)
+
+    if addOriginAsRootBone: numJoints += 1
+
     bounds.insert(0, "bounds {\n")
     bounds.append("}\n")
     bounds.append("\n")
@@ -1635,6 +1741,11 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 description="Mesh group by material",
                 default=False
                 )
+        addOriginAsRootBone = BoolProperty(
+                name="Add origin as root bone",
+                description="Add origin as root bone",
+                default=False
+                )
  
                 
     else:
@@ -1671,6 +1782,11 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 description="Mesh group by material",
                 default=False
                 )
+        addOriginAsRootBone : BoolProperty(
+                name="Add origin as root bone",
+                description="Add origin as root bone",
+                default=False
+                )
                 
     path_mode = path_reference_mode
     check_extension = True
@@ -1698,7 +1814,7 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
         orientationTweak = mu.Matrix.Rotation(math.radians( rotdeg ),4,'Z')
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial)
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial, self.addOriginAsRootBone)
         return {'FINISHED'}
 
 class ExportMD5Anim(bpy.types.Operator, ExportHelper):
@@ -1740,6 +1856,11 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
             description="Only export frames indicated by timeline preview 'Start' and 'End' frames values - otherwise all action frames will be exported.",
             default=False,
             )
+        addOriginAsRootBone = BoolProperty(
+                name="Add origin as root bone",
+                description="Add origin as root bone",
+                default=False
+                )
                  
     else:
     
@@ -1769,6 +1890,11 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
                 name="Use timeline Start/End frames.",
                 description="Only export frames indicated by timeline preview 'Start' and 'End' frames values - otherwise all action frames will be exported.",
                 default=False,
+                )
+        addOriginAsRootBone : BoolProperty(
+                name="Add origin as root bone",
+                description="Add origin as root bone",
+                default=False
                 )
     
     
@@ -1817,7 +1943,7 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
         
-        write_md5anim(self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly,frame_range)
+        write_md5anim(self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly,frame_range, self.addOriginAsRootBone)
         return {'FINISHED'}
 
 class ExportMD5Batch(bpy.types.Operator, ExportHelper):
@@ -1929,6 +2055,11 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 description="Mesh group by material",
                 default=False
                 )
+        addOriginAsRootBone = BoolProperty(
+                name="Add origin as root bone",
+                description="Add origin as root bone",
+                default=False
+                )
         
     else:
         
@@ -1995,6 +2126,11 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 description="Mesh group by material",
                 default=False
                 )
+        addOriginAsRootBone : BoolProperty(
+                name="Add origin as root bone",
+                description="Add origin as root bone",
+                default=False
+                )
        
     path_mode = path_reference_mode
     check_extension = True
@@ -2027,7 +2163,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         collection_Prefix = "("+collection.name+")_"
                
         #write the mesh
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial )
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial, self.addOriginAsRootBone )
                 
         anims = []
         if not self.exportAllAnims:
@@ -2041,7 +2177,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 name = remove_prefix(name,collection_Prefix)
                                      
             self.filepath = os.path.join( batch_directory, name )
-            write_md5anim( self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly, frame_range)
+            write_md5anim( self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly, frame_range, self.addOriginAsRootBone)
             anims.append(name)
         else:
             
@@ -2061,7 +2197,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                         name = name + ".md5anim"
                     self.filepath = os.path.join( batch_directory, name )
                     print("Exporting animation "+self.filepath)
-                    write_md5anim( self.filepath, prerequisites, correctionMatrix, False, frame_range)
+                    write_md5anim( self.filepath, prerequisites, correctionMatrix, False, frame_range, self.addOriginAsRootBone)
                     anims.append(name)
             
             armature.animation_data.action = oldAction
