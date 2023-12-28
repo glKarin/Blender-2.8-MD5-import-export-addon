@@ -976,14 +976,21 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
 
 
 def write_def(filePath, name, mesh, anims):
+    path = "model/md5/"
     f = open(filePath, 'w')
+    if mesh.endswith(".md5mesh"):
+        mesh = mesh[0:-8]
     lines = []
     lines.append("model " + name + " {\n")
-    lines.append("\tmesh {}\n".format(mesh))
+    lines.append("\tmesh \"{}{}.md5mesh\"\n".format(path, mesh))
+    lines.append("\toffset (0 0 1)\n")
     lines.append("\n")
     for anim in anims:
-        lines.append("\tanim {} {}\n".format(anim, anim))
+        if anim.endswith(".md5anim"):
+            anim = anim[0:-8]
+        lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(anim, path, anim))
     lines.append("}\n")
+    lines.append("\n")
     lines.append("entityDef " + name + " {\n")
     lines.append("\t\"spawnclass\" \"idAnimatedEntity\"\n")
     lines.append("\t\"model\" \"{}\"\n".format(name))
@@ -1240,6 +1247,7 @@ class ImportMD5Mesh(bpy.types.Operator, ImportHelper):
                 min=0.01, max=1000.0,
                 soft_min=0.01,
                 soft_max=1000.0,
+                precision=4,
                 default=1.0)
        
         mergeVerticesCM = bpy.props.FloatProperty(
@@ -1276,6 +1284,7 @@ class ImportMD5Mesh(bpy.types.Operator, ImportHelper):
                 min=0.01, max=1000.0,
                 soft_min=0.01,
                 soft_max=1000.0,
+                precision=4,
                 default=1.0)
        
         mergeVerticesCM : bpy.props.FloatProperty(
@@ -1422,6 +1431,7 @@ class ImportMD5Anim(bpy.types.Operator, ImportHelper):
                 min=0.01, max=1000.0,
                 soft_min=0.01,
                 soft_max=1000.0,
+                precision=4,
                 default=1.0)
                 
     else:
@@ -1484,6 +1494,7 @@ class ImportMD5Anim(bpy.types.Operator, ImportHelper):
                 min=0.01, max=1000.0,
                 soft_min=0.01,
                 soft_max=1000.0,
+                precision=4,
                 default=1.0)
                 
             
@@ -1729,6 +1740,7 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 soft_min=0.01,
                 soft_max=1000.0,
                 default=1.0,
+                precision=4,
                 )
 
         fixWindings = BoolProperty(
@@ -1771,6 +1783,7 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 soft_min=0.01,
                 soft_max=1000.0,
                 default=1.0,
+                precision=4,
                 )
         fixWindings : BoolProperty(
                 name="Fix tri indices for eye deform",
@@ -1850,6 +1863,7 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
             soft_min=0.01,
             soft_max=1000.0,
             default=1.0,
+            precision=4,
             )
         previewKeysOnly = BoolProperty(
             name="Use timeline Start/End frames.",
@@ -1885,6 +1899,7 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
                 soft_min=0.01,
                 soft_max=1000.0,
                 default=1.0,
+                precision=4,
                 )
         previewKeysOnly : BoolProperty(
                 name="Use timeline Start/End frames.",
@@ -1966,7 +1981,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         exportAllAnims = BoolProperty(
             name="Export All Anims",
             description="""Export all actions associated with the object/collection as MD5 anims.\n All keyframes for each action will be exported.\n ( This exports all actions in the action editor that are prepended with the object/collection name. )""",
-            default=False,
+            default=True,
             )
         onlyPrepend = BoolProperty(
             name="Prepended action names only",
@@ -2003,7 +2018,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 description="""Export all actions associated with the object/collection as MD5 anims.
     All keyframes for each action will be exported.
     ( This exports all actions in the action editor that are prepended with the object/collection name. )""",
-                default=False,
+                default=True,
                 )
         onlyPrepend = BoolProperty(
                 name="Prepended action names only",
@@ -2038,6 +2053,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 soft_min=0.01,
                 soft_max=1000.0,
                 default=1.0,
+                precision=4,
                 )
                 
         fixWindings = BoolProperty(
@@ -2109,6 +2125,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 soft_min=0.01,
                 soft_max=1000.0,
                 default=1.0,
+                precision=4,
                 )
                 
         fixWindings : BoolProperty(
