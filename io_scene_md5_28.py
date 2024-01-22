@@ -61,6 +61,35 @@ def compat(major, minor, rev):
     v = bpy.app.version
     return v[0] >= major and v[1] >= minor and v[2] >= rev
 
+def file_base_name(file_name):
+    index = file_name.find('.')
+    if index <= 0:
+        return file_name
+    else:
+        return file_name[0:index]
+
+def file_extension_name(file_name):
+    index = file_name.rfind('.')
+    if index < 0 or index >= len(file_name) - 1:
+        return ''
+    else:
+        return file_name[index + 1:]
+
+def file_name_set_extension(file_name, extension):
+    name = file_base_name(file_name)
+    if extension.startswith('.'):
+        return name + extension
+    else:
+        return name + '.' + extension
+
+def normalize_file_name(file_name):
+    name = file_base_name(file_name)
+    ext = file_extension_name(file_name)
+    if len(ext) > 0:
+        return name + '.' + ext
+    else:
+        return name
+
 ###
 ### Import functions
 ###
@@ -959,7 +988,8 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
     bounds.append("}\n")
     bounds.append("\n")
     lines = []
-    lines.append("MD5Version 10" + record_parameters(correctionMatrix) + "\n")
+    exportParms = "frame({} {})".format(startFrame, endFrame + 1)
+    lines.append("MD5Version 10" + record_parameters(correctionMatrix) + " " + exportParms +  "\n")
     lines.append("commandline \"\"\n")
     lines.append("\n")
     lines.append("numFrames " + str(endFrame - startFrame + 1) + "\n")
@@ -978,17 +1008,15 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
 def write_def(filePath, name, mesh, anims):
     path = "model/md5/"
     f = open(filePath, 'w')
-    if mesh.endswith(".md5mesh"):
-        mesh = mesh[0:-8]
+    mesh = file_base_name(mesh)
     lines = []
     lines.append("model " + name + " {\n")
     lines.append("\tmesh \"{}{}.md5mesh\"\n".format(path, mesh))
     lines.append("\toffset (0 0 1)\n")
     lines.append("\n")
     for anim in anims:
-        if anim.endswith(".md5anim"):
-            anim = anim[0:-8]
-        lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(anim, path, anim))
+        anim_name = file_base_name(anim)
+        lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(anim_name, path, anim_name))
     lines.append("}\n")
     lines.append("\n")
     lines.append("entityDef " + name + " {\n")
@@ -1875,6 +1903,16 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
                 description="Add origin as root bone",
                 default=False
                 )
+        startFrame = IntProperty(
+            name="Start frame",
+            description="Start frame",
+            default=0,
+            )
+        endFrame = IntProperty(
+            name="End frame",
+            description="End frame",
+            default=-1,
+            )
                  
     else:
     
@@ -1911,6 +1949,16 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
                 description="Add origin as root bone",
                 default=False
                 )
+        startFrame : IntProperty(
+            name="Start frame",
+            description="Start frame",
+            default=0,
+            )
+        endFrame : IntProperty(
+            name="End frame",
+            description="End frame",
+            default=-1,
+            )
     
     
     path_mode = path_reference_mode
@@ -1925,7 +1973,7 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
         armatures = [a.find_armature() for a in meshObjects]
         armature = armatures[0]
         action=armature.animation_data.action
-        self.filepath = remove_prefix(action.name,collection_Prefix)
+        self.filepath = remove_prefix(normalize_file_name(action.name),collection_Prefix)
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
     
@@ -1957,8 +2005,28 @@ class ExportMD5Anim(bpy.types.Operator, ExportHelper):
         orientationTweak = mu.Matrix.Rotation(math.radians( rotdeg ),4,'Z')
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
-        
-        write_md5anim(self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly,frame_range, self.addOriginAsRootBone)
+
+        start = frame_range[0]
+        end = frame_range[-1]
+        print("{} {}".format(start, end))
+        if not self.previewKeysOnly:
+            if self.startFrame != 0:
+                if self.startFrame < 0:
+                    start = end + self.startFrame
+                else:
+                    start = self.startFrame
+                if start < 0: start = 0
+
+            if self.endFrame != -1:
+                if self.endFrame < 0:
+                    end = end + self.endFrame
+                else:
+                    end = self.endFrame
+                if end < 0: end = 0
+                elif end > frame_range[-1]: end = frame_range[-1]
+        frange = [int(start), int(end)]
+
+        write_md5anim(self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly,frange, self.addOriginAsRootBone)
         return {'FINISHED'}
 
 class ExportMD5Batch(bpy.types.Operator, ExportHelper):
@@ -2192,7 +2260,8 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             
             if self.stripPrepend:
                 name = remove_prefix(name,collection_Prefix)
-                                     
+
+            name = normalize_file_name(name)
             self.filepath = os.path.join( batch_directory, name )
             write_md5anim( self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly, frame_range, self.addOriginAsRootBone)
             anims.append(name)
@@ -2212,6 +2281,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                     
                     if not name.endswith(".md5anim"):
                         name = name + ".md5anim"
+                    name = normalize_file_name(name)
                     self.filepath = os.path.join( batch_directory, name )
                     print("Exporting animation "+self.filepath)
                     write_md5anim( self.filepath, prerequisites, correctionMatrix, False, frame_range, self.addOriginAsRootBone)
