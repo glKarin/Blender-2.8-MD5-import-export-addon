@@ -33,6 +33,7 @@ from bpy.types import (
     Operator,
     OperatorFileListElement)
 
+BONE_LAYER = 1 # 5
 
 msgLines = [] # global for error messages
 prerequisites = None # global for exportable objects
@@ -40,7 +41,7 @@ md5Layer = IntProperty(
         name="Bone Layer",
         description="Bone layer reserved for MD5 export",
         min=1, max=32,
-        default=5)
+        default=BONE_LAYER)
 bpy.types.Scene.md5_bone_layer = md5Layer
 
 def make_annotations(cls):
@@ -538,6 +539,7 @@ def define_components(obj, bm, bones, correctionMatrix, addOriginAsRootBone):
                 (vert.co.to_4d() * scaleFactor)
             x, y, z = coords4d[:3]
             weight = wtDict[vGroup] * wtScaleFactor
+            if weight < 0.000001: weight = 0.000001
             wtEntry = [wtIndex, boneIndex, weight, x, y, z]
             weights.append(wtEntry)
             wtIndex += 1
@@ -582,6 +584,7 @@ def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, a
                 (vert.co.to_4d() * scaleFactor)
             x, y, z = coords4d[:3]
             weight = wtDict[vGroup] * wtScaleFactor
+            if weight < 0.000001: weight = 0.000001
             wtEntry = [wtIndex, boneIndex, weight, x, y, z]
             weights.append(wtEntry)
             wtIndex += 1
@@ -1128,9 +1131,10 @@ def check_weighting(obj, bm, bones):
         else:
             for wgi in influences:
                 if v[weightData][wgi] < 0.000001:
-                    zeroWeightVerts += 1
                     print("Zero Weight %s ( checking against limit of 0.000001 )",v[weightData][wgi])
-                    v.select_set(True)
+                    if False: #karin: auto set 0.000001
+                        zeroWeightVerts += 1
+                        v.select_set(True)
     return (unweightedVerts, zeroWeightVerts)
 
 def is_export_go(what, collection):
@@ -1290,7 +1294,7 @@ class ImportMD5Mesh(bpy.types.Operator, ImportHelper):
                 name="Bone Layer",
                 description="Bones will be assigned to this layer. If changed, remember that only bones in the layer defined in the 'Object Data Properties' of the armature will be exported, so make sure they match.",
                 min=1, max=32,
-                default = 5)
+                default = BONE_LAYER)
     else:
         
         filter_glob : StringProperty(
@@ -1327,7 +1331,7 @@ class ImportMD5Mesh(bpy.types.Operator, ImportHelper):
                 name="Bone Layer",
                 description="Bones will be assigned to this layer. If changed, remember that only bones in the layer defined in the 'Object Data Properties' of the armature will be exported, so make sure they match.",
                 min=1, max=32,
-                default = 5)
+                default = BONE_LAYER)
                 
             
 
