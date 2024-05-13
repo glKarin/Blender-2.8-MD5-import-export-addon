@@ -69,6 +69,22 @@ def file_base_name(file_name):
     else:
         return file_name[0:index]
 
+def file_path(name):
+    name = name.replace("\\", '/')
+    index = name.rfind('/')
+    if index < 0:
+        return ''
+    else:
+        return name[0:index]
+
+def file_name(name):
+    name = name.replace("\\", '/')
+    index = name.rfind('/')
+    if index < 0:
+        return name
+    else:
+        return name[index + 1:]
+
 def file_extension_name(file_name):
     index = file_name.rfind('.')
     if index < 0 or index >= len(file_name) - 1:
@@ -83,8 +99,17 @@ def file_name_set_extension(file_name, extension):
     else:
         return name + '.' + extension
 
+def correct_anim_name(anim_name:str):
+    name = anim_name.replace('.', '_')
+    name = name.replace('-', '_')
+    name = name.lower()
+    if name[0].isdigit():
+        name = '_' + name
+    return name
+
 def normalize_file_name(file_name):
     name = file_base_name(file_name)
+    name = correct_anim_name(name)
     ext = file_extension_name(file_name)
     if len(ext) > 0:
         return name + '.' + ext
@@ -594,20 +619,23 @@ def make_hierarchy_block(bones, boneIndexLookup):
     block = ["hierarchy {\n"]
     xformIndex = 0
     hasRootBond = False
+    index = 0
+    boneDict = {}
     for b in bones:
         if b.parent:
             parentIndex = boneIndexLookup[b.parent.name]
         else:
             parentIndex = -1
-        rawParentIndex = parentIndex
         if parentIndex == -1:
             if hasRootBond:
                 parentIndex = 0
             else:
                 hasRootBond = True
-        block.append("  \"{}\" {} 63 {} // {}\n".format(
-            b.name, parentIndex, xformIndex, rawParentIndex))
+        boneDict[index] = b.name
+        block.append("  \"{}\" {} 63 {} // {} {}\n".format(
+            correct_anim_name(b.name), parentIndex, xformIndex, index, boneDict.get(parentIndex, '')))
         xformIndex += 6
+        index += 1
     block.append("}\n")
     block.append("\n")
     return block
@@ -615,18 +643,21 @@ def make_hierarchy_block(bones, boneIndexLookup):
 def make_hierarchy_block_AddOriginAsRoot(bones, boneIndexLookup):
     block = ["hierarchy {\n"]
     xformIndex = 0
-    block.append("  \"{}\" {} 63 {} // {}\n".format("origin", -1, xformIndex, -2))
+    block.append("  \"{}\" {} 63 {} // {}\n".format("origin", -1, xformIndex, 0))
     xformIndex += 6
+    index = 1
+    boneDict = {}
     for b in bones:
         if b.parent:
             parentIndex = boneIndexLookup[b.parent.name]
         else:
             parentIndex = -1
-        rawParentIndex = parentIndex
+        boneDict[index] = b.name
         parentIndex += 1
-        block.append("  \"{}\" {} 63 {} // {}\n".format(
-            b.name, parentIndex, xformIndex, rawParentIndex))
+        block.append("  \"{}\" {} 63 {} // {} {}\n".format(
+            correct_anim_name(b.name), parentIndex, xformIndex, index, boneDict.get(parentIndex, '')))
         xformIndex += 6
+        index += 1
     block.append("}\n")
     block.append("\n")
     return block
@@ -637,6 +668,7 @@ def make_baseframe_block(bones, correctionMatrix):
     armObject = [o for o in bpy.data.objects
         if o.data == armature][0]
     armMatrix = armObject.matrix_world
+    index = 0
     for b in bones:
         objSpaceMatrix = b.matrix_local
         if b.parent:
@@ -648,19 +680,21 @@ def make_baseframe_block(bones, correctionMatrix):
             bMatrix = correctionMatrix @ objSpaceMatrix
         xPos, yPos, zPos = bMatrix.translation
         xOrient, yOrient, zOrient = (-bMatrix.to_quaternion()).normalized()[1:]
-        block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".\
-        format(xPos, yPos, zPos, xOrient, yOrient, zOrient))
+        block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // {} {}\n".\
+        format(xPos, yPos, zPos, xOrient, yOrient, zOrient, index, b.name))
+        index += 1
     block.append("}\n")
     block.append("\n")
     return block
 
 def make_baseframe_block_AddOriginAsRoot(bones, correctionMatrix):
     block = ["baseframe {\n"]
-    block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".format(0, 0, 0, 0, 0, 0))
+    block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // 0 origin\n".format(0, 0, 0, 0, 0, 0))
     armature = bones[0].id_data
     armObject = [o for o in bpy.data.objects
         if o.data == armature][0]
     armMatrix = armObject.matrix_world
+    index = 1
     for b in bones:
         objSpaceMatrix = b.matrix_local
         if b.parent:
@@ -672,8 +706,9 @@ def make_baseframe_block_AddOriginAsRoot(bones, correctionMatrix):
             bMatrix = correctionMatrix @ objSpaceMatrix
         xPos, yPos, zPos = bMatrix.translation
         xOrient, yOrient, zOrient = (-bMatrix.to_quaternion()).normalized()[1:]
-        block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".\
-        format(xPos, yPos, zPos, xOrient, yOrient, zOrient))
+        block.append("  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // {} {}\n".\
+        format(xPos, yPos, zPos, xOrient, yOrient, zOrient, index, b.name))
+        index += 1
     block.append("}\n")
     block.append("\n")
     return block
@@ -689,7 +724,6 @@ def make_joints_block(bones, boneIndexLookup, correctionMatrix):
             parentIndex = boneIndexLookup[b.parent.name]
         else:
             parentIndex = -1
-        rawParentIndex = parentIndex
         if parentIndex == -1:
             if hasRootBond:
                 parentIndex = 0
@@ -701,11 +735,11 @@ def make_joints_block(bones, boneIndexLookup, correctionMatrix):
         xOrient, yOrient, zOrient =\
         (-boneMatrix.to_quaternion()).normalized()[1:] # MD5 wants it negated
         block.append(\
-        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* index: {}; parent: {} {}({}) */\n".\
-        format(b.name, parentIndex,\
+        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // {} {}\n".\
+        format(correct_anim_name(b.name), parentIndex,\
         xPos, yPos, zPos,\
         xOrient, yOrient, zOrient
-		, index, parentIndex, boneDict.get(parentIndex, ''), rawParentIndex
+		, index, boneDict.get(parentIndex, '')
         ))
         index += 1
     block.append("}\n")
@@ -718,11 +752,10 @@ def make_joints_block_AddOriginAsRoot(bones, boneIndexLookup, correctionMatrix):
     index = 0
     boneDict = {}
     block.append(\
-    "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* index: {}; parent: {} {}({}) */\n".format(
+    "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // 0 GENERATE\n".format(
         "origin", -1,
     0, 0, 0,
     0, 0, 0
-    , 0, "", "generate", -2
     ))
     index += 1
     for b in bones:
@@ -730,7 +763,6 @@ def make_joints_block_AddOriginAsRoot(bones, boneIndexLookup, correctionMatrix):
             parentIndex = boneIndexLookup[b.parent.name]
         else:
             parentIndex = -1
-        rawParentIndex = parentIndex
         parentIndex += 1
         boneDict[index] = b.name
         boneMatrix = correctionMatrix @ b.matrix_local
@@ -738,11 +770,11 @@ def make_joints_block_AddOriginAsRoot(bones, boneIndexLookup, correctionMatrix):
         xOrient, yOrient, zOrient =\
         (-boneMatrix.to_quaternion()).normalized()[1:] # MD5 wants it negated
         block.append(\
-        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) /* index: {}; parent: {} {}({}) */\n".\
-        format(b.name, parentIndex,\
+        "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // {} {}\n".\
+        format(correct_anim_name(b.name), parentIndex,\
         xPos, yPos, zPos,\
         xOrient, yOrient, zOrient
-		, index, parentIndex, boneDict.get(parentIndex, ''), rawParentIndex
+		, index, boneDict.get(parentIndex, '')
         ))
         index += 1
     block.append("}\n")
@@ -794,7 +826,7 @@ def make_mesh_block_SplitByMaterial(obj, bones, correctionMatrix, fixWindings, a
         if not f.material_index in triMap:
             triMap[f.material_index] = []
         group = triMap[f.material_index]
-        group.append(f);
+        group.append(f)
 	
     block = []
     for material_index, faces in triMap.items():
@@ -963,8 +995,11 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
         "  ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} )\n".\
         format(minX, minY, minZ, maxX, maxY, maxZ))
         frameBlock = ["frame {} {{\n".format(frame - startFrame)]
+        index = 0
+        boneDict = {}
         if addOriginAsRootBone:
-            frameBlock.append("  {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} {:.10f}\n".format(0, 0, 0, 0, 0, 0))
+            frameBlock.append("  {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} // 0 origin -1 GENERATE\n".format(0, 0, 0, 0, 0, 0))
+            index += 1
         scaleFactor = correctionMatrix.to_scale()[0]
         for b in bones:
             pBone = pBones[b.name]
@@ -973,12 +1008,20 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
                 diffMatrix = pBone.parent.matrix.inverted() @ armObj.matrix_world @ (pBoneMatrix * scaleFactor)
             else:
                 diffMatrix = correctionMatrix @ pBoneMatrix
+            if b.parent:
+                parentIndex = boneIndexLookup[b.parent.name]
+            else:
+                parentIndex = -1
+            if addOriginAsRootBone:
+                parentIndex += 1
+            boneDict[index] = b.name
             xPos, yPos, zPos = diffMatrix.translation
             xOrient, yOrient, zOrient =\
             (-diffMatrix.to_quaternion()).normalized()[1:]
             frameBlock.append(\
-            "  {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} {:.10f}\n".\
-            format(xPos, yPos, zPos, xOrient, yOrient, zOrient))
+            "  {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} // {} {} {} {}\n".\
+            format(xPos, yPos, zPos, xOrient, yOrient, zOrient, index, correct_anim_name(b.name), parentIndex, boneDict.get(parentIndex, '')))
+            index += 1
         frameBlock.append("}\n")
         frameBlock.append("\n")
         frames.extend(frameBlock)
@@ -1008,10 +1051,42 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
     return
 
 
+def write_material(filePath, name, prerequisites):
+    path = "materials/"
+    bones, meshObjects = prerequisites
+    file = open(filePath, 'w')
+    lines = []
+    for obj in meshObjects:
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        triangulate(cut_up(strip_wires(bm)))
+        triMap = {}
+        for f in bm.faces:
+            if not f.material_index in triMap:
+                triMap[f.material_index] = []
+            group = triMap[f.material_index]
+            group.append(f)
+
+        for material_index, faces in triMap.items():
+            shaderName = obj.material_slots[material_index].material.name
+            lines.append("{} {{\n".format(shaderName))
+            lines.append("\tdiffusemap textures/{}/{}\n".format(name, shaderName))
+            lines.append("\t// bumpmap textures/{}/{}\n".format(name, shaderName))
+            lines.append("\tnullNormal\n")
+            lines.append("\t// noShadows\n")
+            lines.append("\tnoSelfShadow\n")
+            lines.append("}\n")
+            lines.append("\n")
+
+    for line in lines: file.write(line)
+    file.close()
+    return
+
+
 def write_def(filePath, name, mesh, anims):
-    path = "model/md5/"
-    f = open(filePath, 'w')
     mesh = file_base_name(mesh)
+    path = "models/{}/".format(mesh)
+    f = open(filePath, 'w')
     lines = []
     lines.append("model " + name + " {\n")
     lines.append("\tmesh \"{}{}.md5mesh\"\n".format(path, mesh))
@@ -1019,7 +1094,7 @@ def write_def(filePath, name, mesh, anims):
     lines.append("\n")
     for anim in anims:
         anim_name = file_base_name(anim)
-        lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(anim_name, path, anim_name))
+        lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(correct_anim_name(anim_name), path, correct_anim_name(anim_name)))
     lines.append("}\n")
     lines.append("\n")
     lines.append("entityDef " + name + " {\n")
@@ -1242,7 +1317,14 @@ def delete_action(prepend,actionNameToDelete):
 def remove_prefix(text, prefix):
     if text.startswith(prefix):
         return text[len(prefix):]
-    return text 
+    return text
+
+def remove_prefixs(text, prefix):
+    if text.startswith('(' + prefix + ')_'):
+        return text[len('(' + prefix + ')_'):]
+    elif text.startswith(prefix + '_'):
+        return text[len(prefix + '_'):]
+    return text
 
 # Operators
 
@@ -1781,8 +1863,8 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 default=False
                 )
         byMaterial = BoolProperty(
-                name="Mesh group by material",
-                description="Mesh group by material",
+                name="Group by material",
+                description="Group by material",
                 default=False
                 )
         addOriginAsRootBone = BoolProperty(
@@ -1790,6 +1872,11 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 description="Add origin as root bone",
                 default=False
                 )
+        exportMaterial = BoolProperty(
+            name="Export material file",
+            description="""Export material file""",
+            default=False,
+            )
  
                 
     else:
@@ -1823,13 +1910,18 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 default=False
                 )
         byMaterial : BoolProperty(
-                name="Mesh group by material",
-                description="Mesh group by material",
+                name="Group by material",
+                description="Group by material",
                 default=False
                 )
         addOriginAsRootBone : BoolProperty(
                 name="Add origin as root bone",
                 description="Add origin as root bone",
+                default=False
+                )
+        exportMaterial : BoolProperty(
+                name="Export material file",
+                description="Export material file",
                 default=False
                 )
                 
@@ -1860,6 +1952,13 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
         write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial, self.addOriginAsRootBone)
+
+        if self.exportMaterial:
+            basename = file_base_name(file_name(self.filepath))
+            filepath = file_path(self.filepath) + '/' + basename + '.mtr'
+            write_material( filepath, basename, prerequisites)
+            print("Exporting material "+filepath)
+
         return {'FINISHED'}
 
 class ExportMD5Anim(bpy.types.Operator, ExportHelper):
@@ -2071,8 +2170,8 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             default=False,
             )
         exportDef = BoolProperty(
-            name="Export model and def file",
-            description="""Export model and def file""",
+            name="Export def file",
+            description="""Export def file""",
             default=False,
             )
     
@@ -2134,13 +2233,13 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         default=False
         )
         exportDef = BoolProperty(
-            name="Export model and def file",
-            description="""Export model and def file""",
+            name="Export def file",
+            description="""Export def file""",
             default=False,
             )
         byMaterial = BoolProperty(
-                name="Mesh group by material",
-                description="Mesh group by material",
+                name="Group by material",
+                description="Group by material",
                 default=False
                 )
         addOriginAsRootBone = BoolProperty(
@@ -2148,6 +2247,11 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                 description="Add origin as root bone",
                 default=False
                 )
+        exportMaterial = BoolProperty(
+            name="Export material file",
+            description="""Export material file""",
+            default=False,
+            )
         
     else:
         
@@ -2206,18 +2310,23 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         default=False
         )
         exportDef : BoolProperty(
-            name="Export model and def file",
-            description="""Export model and def file""",
+            name="Export def file",
+            description="""Export def file""",
             default=False,
             )
         byMaterial : BoolProperty(
-                name="Mesh group by material",
-                description="Mesh group by material",
+                name="Group by material",
+                description="Group by material",
                 default=False
                 )
         addOriginAsRootBone : BoolProperty(
                 name="Add origin as root bone",
                 description="Add origin as root bone",
+                default=False
+                )
+        exportMaterial : BoolProperty(
+                name="Export material file",
+                description="Export material file",
                 default=False
                 )
        
@@ -2253,6 +2362,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                
         #write the mesh
         write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial, self.addOriginAsRootBone )
+        mesh_filepath = self.filepath
                 
         anims = []
         if not self.exportAllAnims:
@@ -2264,7 +2374,10 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             
             if self.stripPrepend:
                 name = remove_prefix(name,collection_Prefix)
+                name = remove_prefixs(name, collection.name)
 
+            if not name.endswith(".md5anim"):
+                name = name + ".md5anim"
             name = normalize_file_name(name)
             self.filepath = os.path.join( batch_directory, name )
             write_md5anim( self.filepath, prerequisites, correctionMatrix, self.previewKeysOnly, frame_range, self.addOriginAsRootBone)
@@ -2282,6 +2395,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                     armature.animation_data.action = exportAction                   
                     if self.stripPrepend:
                         name = remove_prefix(name,collection_Prefix)
+                        name = remove_prefixs(name, collection.name)
                     
                     if not name.endswith(".md5anim"):
                         name = name + ".md5anim"
@@ -2294,9 +2408,16 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             armature.animation_data.action = oldAction
             
         if self.exportDef:
-            self.filepath = os.path.join( batch_directory, collection.name + ".def" )
-            write_def( self.filepath, collection.name, collection.name, anims)
-            print("Exporting model and def "+self.filepath)
+            basename = file_base_name(file_name(mesh_filepath))
+            filepath = os.path.join( batch_directory, basename + ".def" )
+            write_def( filepath, collection.name, collection.name, anims)
+            print("Exporting model and def " + filepath)
+
+        if self.exportMaterial:
+            basename = file_base_name(file_name(mesh_filepath))
+            filepath = os.path.join( batch_directory, basename + ".mtr" )
+            write_material(filepath, collection.name, prerequisites)
+            print("Exporting material " + filepath)
 
         return {'FINISHED'}
 
