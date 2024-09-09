@@ -581,18 +581,45 @@ def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, a
     weightData = bm.verts.layers.deform.active
     tris = [[f.index, f.verts[2].index, f.verts[1].index, f.verts[0].index]
         for f in faces] # reverse vert order to flip normal
+
+    vert_indexs = [] # 记录用到的顶点索引
+    vert_index_map = {} # 旧索引到新索引的映射
+    for f in tris:
+        if not f[1] in vert_indexs:
+            vert_indexs.append(f[1])
+        if not f[2] in vert_indexs:
+            vert_indexs.append(f[2])
+        if not f[3] in vert_indexs:
+            vert_indexs.append(f[3])
+
+    bm.verts.ensure_lookup_table()
+    new_verts = [] # 移除不使用的顶点的顶点数组
+    for vi in vert_indexs:
+        v = bm.verts[vi]
+        vert_index_map[v.index] = len(new_verts) # 旧索引映射新索引
+        new_verts.append(v)
+
+    # 重新映射图元索引为新索引
+    for tri in tris:
+        tri[3] = vert_index_map[tri[3]]
+        tri[2] = vert_index_map[tri[2]]
+        tri[1] = vert_index_map[tri[1]]
+
     verts = []
     weights = []
     wtIndex = 0
     firstWt = 0
-    for vert in bm.verts:
+    vertIndex = 0 # 新的顶点索引
+    for vert in new_verts: #bm.verts:
         vGroupDict = vert[weightData]
         wtDict = dict([(k, vGroupDict[k]) for k in vGroupDict.keys()
             if k in weightGroupIndexes])
         u = vert.link_loops[0][uvData].uv.x
         v = 1 - vert.link_loops[0][uvData].uv.y # MD5 wants it flipped
         numWts = len(wtDict.keys())
-        verts.append([vert.index, u, v, firstWt, numWts])
+        #verts.append([vert.index, u, v, firstWt, numWts])
+        verts.append([vertIndex, u, v, firstWt, numWts])
+        vertIndex += 1
         wtScaleFactor = 1.0 / sum(wtDict.values())
         firstWt += numWts
         for vGroup in wtDict:
@@ -613,6 +640,7 @@ def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, a
             wtEntry = [wtIndex, boneIndex, weight, x, y, z]
             weights.append(wtEntry)
             wtIndex += 1
+
     return (verts, tris, weights)
 
 def make_hierarchy_block(bones, boneIndexLookup):
@@ -821,6 +849,30 @@ def make_mesh_block_SplitByMaterial(obj, bones, correctionMatrix, fixWindings, a
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     triangulate(cut_up(strip_wires(bm)))
+
+    boneNames = [b.name for b in bones]
+    allVertGroups = obj.vertex_groups[:]
+    print("xxx111 {}".format(len(allVertGroups)))
+    weightData = bm.verts.layers.deform.active
+    print("xxx222  {}".format(weightData))
+    weightGroupIndexes = [vg.index for vg in allVertGroups if vg.name in boneNames]
+    print("xxx {}".format(len(weightGroupIndexes)))
+    triMap2 = {}
+    for f in bm.faces:
+        for vert in f.verts:
+            vGroupDict = vert[weightData]
+            wtDict = dict([(k, vGroupDict[k]) for k in vGroupDict.keys()
+                if k in weightGroupIndexes])
+            #print("xxx ", len(wtDict))
+            for vGroup in wtDict:
+                if not vGroup in triMap2:
+                    triMap2[vGroup] = []
+                    #print("yyy     ", vGroup)
+                group = triMap2[vGroup]
+                group.append(f)
+
+    #triMap = triMap2
+
     triMap = {}
     for f in bm.faces:
         if not f.material_index in triMap:
@@ -830,7 +882,17 @@ def make_mesh_block_SplitByMaterial(obj, bones, correctionMatrix, fixWindings, a
 	
     block = []
     for material_index, faces in triMap.items():
+        #material_index = faces[0].material_index
         verts, tris, weights = define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone)
+
+        # lite_verts = []
+        # lite_weights = []
+        # for tri_index, tri in enumerate(tris):
+        #     vert_index_0 = tri[3]
+        #     vert_index_1 = tri[2]
+        #     vert_index_2 = tri[1]
+
+
         shaderName = "default"
         ms = obj.material_slots
         if True:
