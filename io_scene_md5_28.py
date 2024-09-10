@@ -570,7 +570,7 @@ def define_components(obj, bm, bones, correctionMatrix, addOriginAsRootBone):
             wtIndex += 1
     return (verts, tris, weights)
 
-def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone):
+def define_components_ByFace(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone):
     scaleFactor = correctionMatrix.to_scale()[0]
     armature = [a for a in bpy.data.armatures if bones[0] in a.bones[:]][0]
     armatureObj = [o for o in bpy.data.objects if o.data == armature][0]
@@ -582,8 +582,8 @@ def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, a
     tris = [[f.index, f.verts[2].index, f.verts[1].index, f.verts[0].index]
         for f in faces] # reverse vert order to flip normal
 
-    vert_indexs = [] # 记录用到的顶点索引
-    vert_index_map = {} # 旧索引到新索引的映射
+    vert_indexs = []  # 记录用到的顶点索引
+    vert_index_map = {}  # 旧索引到新索引的映射
     for f in tris:
         if not f[1] in vert_indexs:
             vert_indexs.append(f[1])
@@ -593,24 +593,25 @@ def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, a
             vert_indexs.append(f[3])
 
     bm.verts.ensure_lookup_table()
-    new_verts = [] # 移除不使用的顶点的顶点数组
+    new_verts = []  # 移除不使用的顶点的顶点数组
     for vi in vert_indexs:
         v = bm.verts[vi]
-        vert_index_map[v.index] = len(new_verts) # 旧索引映射新索引
+        vert_index_map[v.index] = len(new_verts)  # 旧索引映射新索引
         new_verts.append(v)
 
     # 重新映射图元索引为新索引
-    for tri in tris:
+    for tri_index, tri in enumerate(tris):
         tri[3] = vert_index_map[tri[3]]
         tri[2] = vert_index_map[tri[2]]
         tri[1] = vert_index_map[tri[1]]
+        tri[0] = tri_index  # tri的索引: 如果需要调试face是否添加, 则注释掉改行. idTech4不会使用tri的索引
 
     verts = []
     weights = []
     wtIndex = 0
     firstWt = 0
-    vertIndex = 0 # 新的顶点索引
-    for vert in new_verts: #bm.verts:
+    vert_index = 0  # 新的顶点索引
+    for vert in new_verts:  #bm.verts:
         vGroupDict = vert[weightData]
         wtDict = dict([(k, vGroupDict[k]) for k in vGroupDict.keys()
             if k in weightGroupIndexes])
@@ -618,8 +619,8 @@ def define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, a
         v = 1 - vert.link_loops[0][uvData].uv.y # MD5 wants it flipped
         numWts = len(wtDict.keys())
         #verts.append([vert.index, u, v, firstWt, numWts])
-        verts.append([vertIndex, u, v, firstWt, numWts])
-        vertIndex += 1
+        verts.append([vert_index, u, v, firstWt, numWts])
+        vert_index += 1
         wtScaleFactor = 1.0 / sum(wtDict.values())
         firstWt += numWts
         for vGroup in wtDict:
@@ -845,53 +846,22 @@ def make_mesh_block(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBo
     block.append("\n")
     return block
 
-def make_mesh_block_SplitByMaterial(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone):
+def make_mesh_block_GroupingByMaterial(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone):
+    print("Generating mesh by material......")
     bm = bmesh.new()
     bm.from_mesh(obj.data)
     triangulate(cut_up(strip_wires(bm)))
 
-    boneNames = [b.name for b in bones]
-    allVertGroups = obj.vertex_groups[:]
-    print("xxx111 {}".format(len(allVertGroups)))
-    weightData = bm.verts.layers.deform.active
-    print("xxx222  {}".format(weightData))
-    weightGroupIndexes = [vg.index for vg in allVertGroups if vg.name in boneNames]
-    print("xxx {}".format(len(weightGroupIndexes)))
-    triMap2 = {}
+    tri_map = {}
     for f in bm.faces:
-        for vert in f.verts:
-            vGroupDict = vert[weightData]
-            wtDict = dict([(k, vGroupDict[k]) for k in vGroupDict.keys()
-                if k in weightGroupIndexes])
-            #print("xxx ", len(wtDict))
-            for vGroup in wtDict:
-                if not vGroup in triMap2:
-                    triMap2[vGroup] = []
-                    #print("yyy     ", vGroup)
-                group = triMap2[vGroup]
-                group.append(f)
-
-    #triMap = triMap2
-
-    triMap = {}
-    for f in bm.faces:
-        if not f.material_index in triMap:
-            triMap[f.material_index] = []
-        group = triMap[f.material_index]
-        group.append(f)
+        if not f.material_index in tri_map:
+            tri_map[f.material_index] = []
+        tri_map[f.material_index].append(f)
 	
     block = []
-    for material_index, faces in triMap.items():
-        #material_index = faces[0].material_index
-        verts, tris, weights = define_components_SplitByMaterial(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone)
-
-        # lite_verts = []
-        # lite_weights = []
-        # for tri_index, tri in enumerate(tris):
-        #     vert_index_0 = tri[3]
-        #     vert_index_1 = tri[2]
-        #     vert_index_2 = tri[1]
-
+    numMesh = 0
+    for material_index, faces in tri_map.items():
+        verts, tris, weights = define_components_ByFace(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone)
 
         shaderName = "default"
         ms = obj.material_slots
@@ -902,7 +872,7 @@ def make_mesh_block_SplitByMaterial(obj, bones, correctionMatrix, fixWindings, a
                 taken = [s for s in ms if s.material ]
                 if taken:
                     shaderName = taken[0].material.name
-        print(shaderName)
+        print("Generate mesh {} with material: {}".format(numMesh, shaderName))
         block.append("mesh {\n")
         block.append("  shader \"{}\"\n".format(shaderName))
         block.append("\n  numverts {}\n".format(len(verts)))
@@ -924,9 +894,107 @@ def make_mesh_block_SplitByMaterial(obj, bones, correctionMatrix, fixWindings, a
             format(w[0], w[1], w[2], w[3], w[4], w[5]))
         block.append("}\n")
         block.append("\n")
+        numMesh += 1
     bm.free()
-		
-    return (len(triMap), block)
+
+    print("Generate mesh num by material: {}".format(len(tri_map)))
+    return (len(tri_map), block)
+
+def make_mesh_block_GroupingByVertexGroup(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone):
+    print("Generating mesh by vertex group......")
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    triangulate(cut_up(strip_wires(bm)))
+
+    boneNames = [b.name for b in bones]
+    allVertGroups = obj.vertex_groups[:]
+    print("Vertex group count: {}".format(len(allVertGroups)))
+    weightData = bm.verts.layers.deform.active
+    weightGroupIndexes = [vg.index for vg in allVertGroups if vg.name in boneNames]
+    print("Weight group count {}".format(len(weightGroupIndexes)))
+
+    tri_map = {}  # 按材质索引分组face
+    for f in bm.faces:
+        if not f.material_index in tri_map:
+            tri_map[f.material_index] = []
+        tri_map[f.material_index].append(f)
+
+    block = []
+    numMesh = 0
+    for material_index, mat_faces in tri_map.items():
+        shaderName = "default"
+        ms = obj.material_slots
+        if True:
+            shaderName = obj.material_slots[material_index].material.name
+        else:
+            if ms:
+                taken = [s for s in ms if s.material ]
+                if taken:
+                    shaderName = taken[0].material.name
+
+        tri_face_map = {}  # 按顶点组索引分组face
+
+        tri_index_added = []
+        for f in mat_faces:
+            # 检查face是否已经添加
+            if f.index in tri_index_added:
+                # print("exists -> {}".format(f.index))
+                continue
+            tri_index_added.append(f.index)
+
+            for vert in f.verts:
+                vGroupDict = vert[weightData]
+                vertex_group_index_list = [k for k in vGroupDict.keys() if k in weightGroupIndexes]
+
+                # 记录是否已经添加face到某一个顶点组
+                added = False
+                for vg_index in vertex_group_index_list:
+                    if not vg_index in tri_face_map:
+                        tri_face_map[vg_index] = {
+                            'name': allVertGroups[vg_index].name,
+                            'faces': [],
+                            'face_indexs': [],
+                        }
+                    if not f.index in tri_face_map[vg_index]['face_indexs']:
+                        tri_face_map[vg_index]['faces'].append(f)
+                        tri_face_map[vg_index]['face_indexs'].append(f.index)
+                        added = True
+                        break
+
+                if added:
+                    break
+
+        for vg_index, vg in tri_face_map.items():
+            faces = vg['faces']
+            verts, tris, weights = define_components_ByFace(obj, bm, bones, correctionMatrix, faces, addOriginAsRootBone)
+
+            print("Generate mesh {} '{}' with material: {}".format(numMesh, vg['name'], shaderName))
+            block.append("mesh {{ // {}\n".format(vg['name']))
+            block.append("  shader \"{}\"\n".format(shaderName))
+            block.append("\n  numverts {}\n".format(len(verts)))
+            for v in verts:
+                block.append(\
+                "  vert {} ( {:.10f} {:.10f} ) {} {}\n".\
+                format(v[0], v[1], v[2], v[3], v[4]))
+            block.append("\n  numtris {}\n".format(len(tris)))
+            for t in tris:
+                if fixWindings:
+                    block.append("  tri {} {} {} {}\n".format(t[0], t[3], t[1], t[2])) # fix windings - current blender windings break eyeDeform in D3 materials
+                else:
+                    block.append("  tri {} {} {} {}\n".format(t[0], t[1], t[2], t[3]))
+
+            block.append("\n  numweights {}\n".format(len(weights)))
+            for w in weights:
+                block.append(\
+                "  weight {} {} {:.10f} ( {:.10f} {:.10f} {:.10f} )\n".\
+                format(w[0], w[1], w[2], w[3], w[4], w[5]))
+            block.append("}\n")
+            block.append("\n")
+            numMesh += 1
+    bm.free()
+
+    print("Generate mesh num by vertex group: {}".format(numMesh))
+    return (numMesh, block)
 
 def strip_wires(bm):
     [bm.faces.remove(f) for f in bm.faces if len(f.verts) < 3]
@@ -964,7 +1032,12 @@ def triangulate(bm):
     bmesh.ops.triangulate(bm, faces=nonTris)
     return bm
 
-def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, byMaterial, addOriginAsRootBone):
+def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, groupingMesh, addOriginAsRootBone):
+    cmdstr = record_parameters(correctionMatrix)
+    cmdstr += '; Grouping mesh: ' + groupingMesh
+    cmdstr += '; Add origin as root bone: {}'.format(addOriginAsRootBone)
+    print('Export md5mesh -> ' + cmdstr)
+
     bones, meshObjects = prerequisites
     boneIndexLookup = {}
     for b in bones:
@@ -978,8 +1051,12 @@ def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, byMate
     md5meshes = []
     nummeshes = 0
     for mo in meshObjects:
-        if byMaterial:
-            num, meshes = make_mesh_block_SplitByMaterial(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone)
+        if groupingMesh == 'material':
+            num, meshes = make_mesh_block_GroupingByMaterial(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone)
+            nummeshes += num
+            md5meshes.append(meshes)
+        elif groupingMesh == 'vertex_group':
+            num, meshes = make_mesh_block_GroupingByVertexGroup(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone)
             nummeshes += num
             md5meshes.append(meshes)
         else:
@@ -991,7 +1068,7 @@ def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, byMate
     if addOriginAsRootBone: numBone += 1
 
     lines = []
-    lines.append("MD5Version 10" + record_parameters(correctionMatrix) + "\n")
+    lines.append("MD5Version 10" + cmdstr + "\n")
     lines.append("commandline \"\"\n")
     lines.append("\n")
     lines.append("numJoints " + str(numBone) + "\n")
@@ -1122,14 +1199,14 @@ def write_material(filePath, name, prerequisites):
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         triangulate(cut_up(strip_wires(bm)))
-        triMap = {}
+        tri_map = {}
         for f in bm.faces:
-            if not f.material_index in triMap:
-                triMap[f.material_index] = []
-            group = triMap[f.material_index]
+            if not f.material_index in tri_map:
+                tri_map[f.material_index] = []
+            group = tri_map[f.material_index]
             group.append(f)
 
-        for material_index, faces in triMap.items():
+        for material_index, faces in tri_map.items():
             shaderName = obj.material_slots[material_index].material.name
             lines.append("{} {{\n".format(shaderName))
             lines.append("\tdiffusemap textures/{}/{}\n".format(name, shaderName))
@@ -1924,10 +2001,14 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 description="Only select if having issues with materials flagged with eyeDeform",
                 default=False
                 )
-        byMaterial = BoolProperty(
-                name="Group by material",
-                description="Group by material",
-                default=False
+        groupingMesh = bpy.props.EnumProperty(
+                name = "Grouping mesh",
+                description="Split meshes and grouping",
+                items = (('none', 'None', 'Do not reorient'),
+                        ('material', 'By material', 'Split meshes grouping by material'),
+                        ('vertex_group', 'By vertex group', 'Split meshes grouping by vertex group'),
+                        ),
+                default = 'none'
                 )
         addOriginAsRootBone = BoolProperty(
                 name="Add origin as root bone",
@@ -1971,10 +2052,14 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                 description="Only select if having issues with materials flagged with eyeDeform",
                 default=False
                 )
-        byMaterial : BoolProperty(
-                name="Group by material",
-                description="Group by material",
-                default=False
+        groupingMesh : bpy.props.EnumProperty(
+                name = "Grouping mesh",
+                description="Split meshes and grouping",
+                items = (('none', 'None', 'Do not reorient'),
+                        ('material', 'By material', 'Split meshes grouping by material'),
+                        ('vertex_group', 'By vertex group', 'Split meshes grouping by vertex group'),
+                        ),
+                default = 'none'
                 )
         addOriginAsRootBone : BoolProperty(
                 name="Add origin as root bone",
@@ -2013,7 +2098,7 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
         orientationTweak = mu.Matrix.Rotation(math.radians( rotdeg ),4,'Z')
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial, self.addOriginAsRootBone)
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.groupingMesh, self.addOriginAsRootBone)
 
         if self.exportMaterial:
             basename = file_base_name(file_name(self.filepath))
@@ -2299,10 +2384,14 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             description="""Export def file""",
             default=False,
             )
-        byMaterial = BoolProperty(
-                name="Group by material",
-                description="Group by material",
-                default=False
+        groupingMesh = bpy.props.EnumProperty(
+                name = "Grouping mesh",
+                description="Split meshes and grouping",
+                items = (('none', 'None', 'Do not reorient'),
+                        ('material', 'By material', 'Split meshes grouping by material'),
+                        ('vertex_group', 'By vertex group', 'Split meshes grouping by vertex group'),
+                        ),
+                default = 'none'
                 )
         addOriginAsRootBone = BoolProperty(
                 name="Add origin as root bone",
@@ -2376,10 +2465,14 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
             description="""Export def file""",
             default=False,
             )
-        byMaterial : BoolProperty(
-                name="Group by material",
-                description="Group by material",
-                default=False
+        groupingMesh : bpy.props.EnumProperty(
+                name = "Grouping mesh",
+                description="Split meshes and grouping",
+                items = (('none', 'None', 'Do not reorient'),
+                        ('material', 'By material', 'Split meshes grouping by material'),
+                        ('vertex_group', 'By vertex group', 'Split meshes grouping by vertex group'),
+                        ),
+                default = 'none'
                 )
         addOriginAsRootBone : BoolProperty(
                 name="Add origin as root bone",
@@ -2423,7 +2516,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         collection_Prefix = "("+collection.name+")_"
                
         #write the mesh
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.byMaterial, self.addOriginAsRootBone )
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.groupingMesh, self.addOriginAsRootBone )
         mesh_filepath = self.filepath
                 
         anims = []
