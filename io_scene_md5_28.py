@@ -116,6 +116,48 @@ def normalize_file_name(file_name):
     else:
         return name
 
+def filter_names(names, filter_names):
+    out_names = []
+    for f in filter_names:
+        if f.startswith('-'):
+            f = f[1:]
+            if f.find('*') < 0: #  not regexp
+                tmp = out_names.copy()
+                for n in tmp:
+                    if n == f:
+                        out_names.remove(n)
+            else:
+                f = f.replace('.', '\\.')
+                f = f.replace('*', '.*')
+                regexp = re.compile(f)
+                tmp = out_names.copy()
+                for n in tmp:
+                    if regexp.match(n):
+                        out_names.remove(n)
+            continue
+
+        if f.startswith('+'):
+            f = f[1:]
+
+        if f.find('*') < 0: #  not regexp
+            for n in names:
+                if n == f and not n in out_names:
+                    out_names.append(n)
+        else:
+            f = f.replace('.', '\\.')
+            f = f.replace('*', '.*')
+            regexp = re.compile(f)
+            for n in names:
+                if regexp.match(n) and not n in out_names:
+                    out_names.append(n)
+
+    res = []
+    for n in names:
+        if n in out_names:
+            res.append(n)
+            print(n)
+    return res
+
 ###
 ### Import functions
 ###
@@ -846,7 +888,7 @@ def make_mesh_block(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBo
     block.append("\n")
     return block
 
-def make_mesh_block_GroupingByMaterial(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone):
+def make_mesh_block_GroupingByMaterial(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone, filterNames):
     print("Generating mesh by material......")
     bm = bmesh.new()
     bm.from_mesh(obj.data)
@@ -857,6 +899,13 @@ def make_mesh_block_GroupingByMaterial(obj, bones, correctionMatrix, fixWindings
         if not f.material_index in tri_map:
             tri_map[f.material_index] = []
         tri_map[f.material_index].append(f)
+
+    do_filter = len(filterNames) > 0
+    filter = []
+    if do_filter:
+        names = [obj.material_slots[i].material.name for i in tri_map]
+        filter = filter_names(names, filterNames)
+        print("Filter mesh by material: {}".format(filter))
 	
     block = []
     numMesh = 0
@@ -872,6 +921,11 @@ def make_mesh_block_GroupingByMaterial(obj, bones, correctionMatrix, fixWindings
                 taken = [s for s in ms if s.material ]
                 if taken:
                     shaderName = taken[0].material.name
+
+        if do_filter and not shaderName in filter:
+            print("Skip mesh with material: {}".format(shaderName))
+            continue
+
         print("Generate mesh {} with material: {}".format(numMesh, shaderName))
         block.append("mesh {\n")
         block.append("  shader \"{}\"\n".format(shaderName))
@@ -898,9 +952,9 @@ def make_mesh_block_GroupingByMaterial(obj, bones, correctionMatrix, fixWindings
     bm.free()
 
     print("Generate mesh num by material: {}".format(len(tri_map)))
-    return (len(tri_map), block)
+    return (numMesh, block)
 
-def make_mesh_block_GroupingByVertexGroup(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone):
+def make_mesh_block_GroupingByVertexGroup(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBone, filterNames):
     print("Generating mesh by vertex group......")
     bm = bmesh.new()
     bm.from_mesh(obj.data)
@@ -919,6 +973,14 @@ def make_mesh_block_GroupingByVertexGroup(obj, bones, correctionMatrix, fixWindi
             tri_map[f.material_index] = []
         tri_map[f.material_index].append(f)
 
+    do_filter = len(filterNames) > 0
+    filter = []
+    if do_filter:
+        names = [vg.name for vg in allVertGroups]
+        filter = filter_names(names, filterNames)
+        print("Filter mesh by vertex group: {}".format(filter))
+
+    skipped = []
     block = []
     numMesh = 0
     for material_index, mat_faces in tri_map.items():
@@ -940,7 +1002,6 @@ def make_mesh_block_GroupingByVertexGroup(obj, bones, correctionMatrix, fixWindi
             if f.index in tri_index_added:
                 # print("exists -> {}".format(f.index))
                 continue
-            tri_index_added.append(f.index)
 
             for vert in f.verts:
                 vGroupDict = vert[weightData]
@@ -949,15 +1010,23 @@ def make_mesh_block_GroupingByVertexGroup(obj, bones, correctionMatrix, fixWindi
                 # 记录是否已经添加face到某一个顶点组
                 added = False
                 for vg_index in vertex_group_index_list:
+                    vg_name = allVertGroups[vg_index].name
+                    if do_filter and not vg_name in filter:
+                        if not vg_name in skipped:
+                            skipped.append(vg_name)
+                            print("Skip mesh with vertex group: {}".format(vg_name))
+                        continue
+
                     if not vg_index in tri_face_map:
                         tri_face_map[vg_index] = {
-                            'name': allVertGroups[vg_index].name,
+                            'name': vg_name,
                             'faces': [],
                             'face_indexs': [],
                         }
                     if not f.index in tri_face_map[vg_index]['face_indexs']:
                         tri_face_map[vg_index]['faces'].append(f)
                         tri_face_map[vg_index]['face_indexs'].append(f.index)
+                        tri_index_added.append(f.index)
                         added = True
                         break
 
@@ -1032,10 +1101,11 @@ def triangulate(bm):
     bmesh.ops.triangulate(bm, faces=nonTris)
     return bm
 
-def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, groupingMesh, addOriginAsRootBone):
+def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, groupingMesh, addOriginAsRootBone, filterMesh):
     cmdstr = record_parameters(correctionMatrix)
     cmdstr += '; Grouping mesh: ' + groupingMesh
     cmdstr += '; Add origin as root bone: {}'.format(addOriginAsRootBone)
+    cmdstr += '; Filter mesh: {}'.format(filterMesh)
     print('Export md5mesh -> ' + cmdstr)
 
     bones, meshObjects = prerequisites
@@ -1047,16 +1117,24 @@ def write_md5mesh(filePath, prerequisites, correctionMatrix, fixWindings, groupi
         md5joints = make_joints_block_AddOriginAsRoot(bones, boneIndexLookup, correctionMatrix)
     else:
         md5joints = make_joints_block(bones, boneIndexLookup, correctionMatrix)
-        
+
+    filterNames = []
+    if len(filterMesh):
+        filterNames = filterMesh.split(',')
+        if filterMesh.startswith('-'):
+            filterNames.insert(0, '*')
+        print("Filter mesh rule: {}".format(filterNames))
+
+
     md5meshes = []
     nummeshes = 0
     for mo in meshObjects:
         if groupingMesh == 'material':
-            num, meshes = make_mesh_block_GroupingByMaterial(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone)
+            num, meshes = make_mesh_block_GroupingByMaterial(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone, filterNames)
             nummeshes += num
             md5meshes.append(meshes)
         elif groupingMesh == 'vertex_group':
-            num, meshes = make_mesh_block_GroupingByVertexGroup(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone)
+            num, meshes = make_mesh_block_GroupingByVertexGroup(mo, bones, correctionMatrix, fixWindings, addOriginAsRootBone, filterNames)
             nummeshes += num
             md5meshes.append(meshes)
         else:
@@ -2010,6 +2088,11 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                         ),
                 default = 'none'
                 )
+        filterMesh = StringProperty(
+                name = "Filter mesh",
+                description="Filter meshes by material name or vertex group name(split by ',' and support '+' '-' '*')",
+                default="",
+            )
         addOriginAsRootBone = BoolProperty(
                 name="Add origin as root bone",
                 description="Add origin as root bone",
@@ -2061,6 +2144,11 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
                         ),
                 default = 'none'
                 )
+        filterMesh : StringProperty(
+                name = "Filter mesh",
+                description="Filter meshes by material name or vertex group name(split by ',' and support '+' '-' '*')",
+                default="",
+            )
         addOriginAsRootBone : BoolProperty(
                 name="Add origin as root bone",
                 description="Add origin as root bone",
@@ -2098,7 +2186,7 @@ class ExportMD5Mesh(bpy.types.Operator, ExportHelper):
         orientationTweak = mu.Matrix.Rotation(math.radians( rotdeg ),4,'Z')
         scaleTweak = mu.Matrix.Scale(self.scaleFactor, 4)
         correctionMatrix = orientationTweak @ scaleTweak
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.groupingMesh, self.addOriginAsRootBone)
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.groupingMesh, self.addOriginAsRootBone, self.filterMesh)
 
         if self.exportMaterial:
             basename = file_base_name(file_name(self.filepath))
@@ -2393,6 +2481,11 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                         ),
                 default = 'none'
                 )
+        filterMesh = StringProperty(
+                name = "Filter mesh",
+                description="Filter meshes by material name or vertex group name(split by ',' and support '+' '-' '*')",
+                default="",
+            )
         addOriginAsRootBone = BoolProperty(
                 name="Add origin as root bone",
                 description="Add origin as root bone",
@@ -2474,6 +2567,11 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
                         ),
                 default = 'none'
                 )
+        filterMesh : StringProperty(
+                name = "Filter mesh",
+                description="Filter meshes by material name or vertex group name(split by ',' and support '+' '-' '*')",
+                default="",
+            )
         addOriginAsRootBone : BoolProperty(
                 name="Add origin as root bone",
                 description="Add origin as root bone",
@@ -2516,7 +2614,7 @@ class ExportMD5Batch(bpy.types.Operator, ExportHelper):
         collection_Prefix = "("+collection.name+")_"
                
         #write the mesh
-        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.groupingMesh, self.addOriginAsRootBone )
+        write_md5mesh(self.filepath, prerequisites, correctionMatrix, self.fixWindings, self.groupingMesh, self.addOriginAsRootBone, self.filterMesh )
         mesh_filepath = self.filepath
                 
         anims = []
