@@ -1,3 +1,16 @@
+> Add some feature from KozGit/Blender-2.8-MD5-import-export-addon
+
+| Features | Description |
+|:-:|:-|
+| [Export] Default bone layer | 1 (not 5) |
+| [Export] Add origin bone as root bone | Some model has more root bone |
+| [Export] Grouping mesh by material | Split meshes by material |
+| [Export] Grouping mesh by vertex group | Split meshes by vertex group |
+| [Export] Filter names by material/vertex group | Separate by ',', support '+', '-', '*' match. e.g. *,-bone_hand*,+*_L,+*_R = from all names, and exclude names that starts with 'bone_hand', and include names that ends with '_L' or '_R' |
+| [Export] Exprot material file | Generate simple idTech4's material file |
+
+------
+
 Blender-2.8-MD5-import-export-addon
 .MD5 model ( idTech 4 .md5mesh and .md5anim ) import/export addon for Blender 2.8 thru Blender 3.4. Supports batch import/export of .md5anim files as actions in Blender.
 
