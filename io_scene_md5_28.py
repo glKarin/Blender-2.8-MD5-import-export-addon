@@ -104,6 +104,7 @@ def correct_anim_name(anim_name:str):
     name = name.replace('-', '_')
     name = name.replace('(', '_')
     name = name.replace(')', '')
+    name = name.replace(' ', '_')
     name = name.lower()
     if name[0].isdigit():
         name = '_' + name
