@@ -99,12 +99,13 @@ def file_name_set_extension(file_name, extension):
     else:
         return name + '.' + extension
 
-def correct_anim_name(anim_name:str):
-    name = anim_name.replace('.', '_')
+def correct_name_token(token:str):
+    name = token.replace('.', '_')
     name = name.replace('-', '_')
     name = name.replace('(', '_')
     name = name.replace(')', '')
     name = name.replace(' ', '_')
+    name = name.replace('&', '_')
     name = name.lower()
     if name[0].isdigit():
         name = '_' + name
@@ -112,12 +113,20 @@ def correct_anim_name(anim_name:str):
 
 def normalize_file_name(file_name):
     name = file_base_name(file_name)
-    name = correct_anim_name(name)
+    name = correct_name_token(name)
     ext = file_extension_name(file_name)
     if len(ext) > 0:
         return name + '.' + ext
     else:
         return name
+
+def correct_file_name(token:str):
+    name = token.replace('-', '_')
+    name = name.replace('(', '_')
+    name = name.replace(')', '')
+    name = name.replace(' ', '_')
+    name = name.replace('&', '_')
+    return name
 
 def filter_names(names, filter_names):
     out_names = []
@@ -707,7 +716,7 @@ def make_hierarchy_block(bones, boneIndexLookup):
                 hasRootBond = True
         boneDict[index] = b.name
         block.append("  \"{}\" {} 63 {} // {} {}\n".format(
-            correct_anim_name(b.name), parentIndex, xformIndex, index, boneDict.get(parentIndex, '')))
+            correct_name_token(b.name), parentIndex, xformIndex, index, boneDict.get(parentIndex, '')))
         xformIndex += 6
         index += 1
     block.append("}\n")
@@ -729,7 +738,7 @@ def make_hierarchy_block_AddOriginAsRoot(bones, boneIndexLookup):
         boneDict[index] = b.name
         parentIndex += 1
         block.append("  \"{}\" {} 63 {} // {} {}\n".format(
-            correct_anim_name(b.name), parentIndex, xformIndex, index, boneDict.get(parentIndex, '')))
+            correct_name_token(b.name), parentIndex, xformIndex, index, boneDict.get(parentIndex, '')))
         xformIndex += 6
         index += 1
     block.append("}\n")
@@ -810,7 +819,7 @@ def make_joints_block(bones, boneIndexLookup, correctionMatrix):
         (-boneMatrix.to_quaternion()).normalized()[1:] # MD5 wants it negated
         block.append(\
         "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // {} {}\n".\
-        format(correct_anim_name(b.name), parentIndex,\
+        format(correct_name_token(b.name), parentIndex,\
         xPos, yPos, zPos,\
         xOrient, yOrient, zOrient
 		, index, boneDict.get(parentIndex, '')
@@ -845,7 +854,7 @@ def make_joints_block_AddOriginAsRoot(bones, boneIndexLookup, correctionMatrix):
         (-boneMatrix.to_quaternion()).normalized()[1:] # MD5 wants it negated
         block.append(\
         "  \"{}\" {} ( {:.10f} {:.10f} {:.10f} ) ( {:.10f} {:.10f} {:.10f} ) // {} {}\n".\
-        format(correct_anim_name(b.name), parentIndex,\
+        format(correct_name_token(b.name), parentIndex,\
         xPos, yPos, zPos,\
         xOrient, yOrient, zOrient
 		, index, boneDict.get(parentIndex, '')
@@ -868,8 +877,8 @@ def make_mesh_block(obj, bones, correctionMatrix, fixWindings, addOriginAsRootBo
     verts, tris, weights = define_components(obj, bm, bones, correctionMatrix, addOriginAsRootBone)
     bm.free()
     block = []
-    block.append("mesh {\n")
-    block.append("  shader \"{}\"\n".format(shaderName))
+    block.append("mesh {{ // {}\n".format(obj.data.name))
+    block.append("  shader \"{}\"\n".format(correct_name_token(shaderName)))
     block.append("\n  numverts {}\n".format(len(verts)))
     for v in verts:
         block.append(\
@@ -930,8 +939,8 @@ def make_mesh_block_GroupingByMaterial(obj, bones, correctionMatrix, fixWindings
             continue
 
         print("Generate mesh {} with material: {}".format(numMesh, shaderName))
-        block.append("mesh {\n")
-        block.append("  shader \"{}\"\n".format(shaderName))
+        block.append("mesh {{ // {}\n".format(obj.data.name))
+        block.append("  shader \"{}\"\n".format(correct_name_token(shaderName)))
         block.append("\n  numverts {}\n".format(len(verts)))
         for v in verts:
             block.append(\
@@ -1042,7 +1051,7 @@ def make_mesh_block_GroupingByVertexGroup(obj, bones, correctionMatrix, fixWindi
 
             print("Generate mesh {} '{}' with material: {}".format(numMesh, vg['name'], shaderName))
             block.append("mesh {{ // {}\n".format(vg['name']))
-            block.append("  shader \"{}\"\n".format(shaderName))
+            block.append("  shader \"{}\"\n".format(correct_name_token(shaderName)))
             block.append("\n  numverts {}\n".format(len(verts)))
             for v in verts:
                 block.append(\
@@ -1240,7 +1249,7 @@ def write_md5anim(filePath, prerequisites, correctionMatrix, previewKeys, frame_
             (-diffMatrix.to_quaternion()).normalized()[1:]
             frameBlock.append(\
             "  {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} {:.10f} // {} {} {} {}\n".\
-            format(xPos, yPos, zPos, xOrient, yOrient, zOrient, index, correct_anim_name(b.name), parentIndex, boneDict.get(parentIndex, '')))
+            format(xPos, yPos, zPos, xOrient, yOrient, zOrient, index, correct_name_token(b.name), parentIndex, boneDict.get(parentIndex, '')))
             index += 1
         frameBlock.append("}\n")
         frameBlock.append("\n")
@@ -1289,9 +1298,9 @@ def write_material(filePath, name, prerequisites):
 
         for material_index, faces in tri_map.items():
             shaderName = obj.material_slots[material_index].material.name
-            lines.append("{} {{\n".format(shaderName))
-            lines.append("\tdiffusemap textures/{}/{}\n".format(name, shaderName))
-            lines.append("\t// bumpmap textures/{}/{}\n".format(name, shaderName))
+            lines.append("{} {{\n".format(correct_name_token(shaderName)))
+            lines.append("\tdiffusemap textures/{}/{}\n".format(name, correct_file_name(shaderName)))
+            lines.append("\t// bumpmap textures/{}/{}\n".format(name, correct_file_name(shaderName)))
             lines.append("\tnullNormal\n")
             lines.append("\t// noShadows\n")
             lines.append("\tnoSelfShadow\n")
@@ -1314,7 +1323,7 @@ def write_def(filePath, name, mesh, anims):
     lines.append("\n")
     for anim in anims:
         anim_name = file_base_name(anim)
-        lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(correct_anim_name(anim_name), path, correct_anim_name(anim_name)))
+        lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(correct_name_token(anim_name), path, correct_name_token(anim_name)))
     lines.append("}\n")
     lines.append("\n")
     lines.append("entityDef " + name + " {\n")
