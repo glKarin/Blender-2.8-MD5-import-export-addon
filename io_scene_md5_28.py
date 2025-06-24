@@ -106,6 +106,7 @@ def correct_name_token(token:str):
     name = name.replace(')', '')
     name = name.replace(' ', '_')
     name = name.replace('&', '_')
+    name = name.replace('@', '_')
     name = name.lower()
     if name[0].isdigit():
         name = '_' + name
@@ -126,6 +127,7 @@ def correct_file_name(token:str):
     name = name.replace(')', '')
     name = name.replace(' ', '_')
     name = name.replace('&', '_')
+    name = name.replace('@', '_')
     return name
 
 def filter_names(names, filter_names):
@@ -1284,7 +1286,7 @@ def write_material(filePath, name, prerequisites):
     path = "materials/"
     bones, meshObjects = prerequisites
     file = open(filePath, 'w')
-    lines = []
+    mats = []
     for obj in meshObjects:
         bm = bmesh.new()
         bm.from_mesh(obj.data)
@@ -1298,14 +1300,19 @@ def write_material(filePath, name, prerequisites):
 
         for material_index, faces in tri_map.items():
             shaderName = obj.material_slots[material_index].material.name
-            lines.append("{} {{\n".format(correct_name_token(shaderName)))
-            lines.append("\tdiffusemap textures/{}/{}\n".format(name, correct_file_name(shaderName)))
-            lines.append("\t// bumpmap textures/{}/{}\n".format(name, correct_file_name(shaderName)))
-            lines.append("\tnullNormal\n")
-            lines.append("\t// noShadows\n")
-            lines.append("\tnoSelfShadow\n")
-            lines.append("}\n")
-            lines.append("\n")
+            if shaderName not in mats:
+                mats.append(shaderName)
+
+    lines = []
+    for shaderName in mats:
+        lines.append("{} {{\n".format(correct_name_token(shaderName)))
+        lines.append("\tdiffusemap textures/{}/{}\n".format(name, correct_file_name(shaderName)))
+        lines.append("\t// bumpmap textures/{}/{}\n".format(name, correct_file_name(shaderName)))
+        lines.append("\tnullNormal\n")
+        lines.append("\t// noShadows\n")
+        lines.append("\tnoSelfShadow\n")
+        lines.append("}\n")
+        lines.append("\n")
 
     for line in lines: file.write(line)
     file.close()
@@ -1321,6 +1328,7 @@ def write_def(filePath, name, mesh, anims):
     lines.append("\tmesh \"{}{}.md5mesh\"\n".format(path, mesh))
     lines.append("\toffset (0 0 1)\n")
     lines.append("\n")
+    anims = [x for i, x in enumerate(anims) if x not in anims[:i]]
     for anim in anims:
         anim_name = file_base_name(anim)
         lines.append("\tanim \"{}\" \"{}{}.md5anim\"\n".format(correct_name_token(anim_name), path, correct_name_token(anim_name)))
